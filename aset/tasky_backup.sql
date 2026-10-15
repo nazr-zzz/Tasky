@@ -91,13 +91,13 @@ CREATE TABLE `notification` (
 
 --
 -- Table structure for table `status_tugas`
---
+-- status : "belum selesai", "selesai"
 
 CREATE TABLE `status_tugas` (
   `STATUS_ID` varchar(36) NOT NULL,
   `TASK_ID` varchar(36) NOT NULL,
   `USER_ID` varchar(36) NOT NULL,
-  `STATUS` varchar(20) NOT NULL,
+  `STATUS` varchar(20) NOT NULL, --"belum selesai", "selesai"
   `UPDATED_AT` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -185,7 +185,7 @@ ALTER TABLE `notification`
 
 --
 -- Indexes for table `status_tugas`
---
+-- 
 ALTER TABLE `status_tugas`
   ADD PRIMARY KEY (`STATUS_ID`),
   ADD KEY `FK_STATUS_T_PROGRES_P_USER` (`USER_ID`),
