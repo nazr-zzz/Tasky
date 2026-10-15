@@ -31,7 +31,7 @@ CREATE TABLE `anggota_kelas` (
   `ANGGOTA_ID` varchar(36) NOT NULL,
   `USER_ID` varchar(36) NOT NULL,
   `KELAS_ID` varchar(36) NOT NULL,
-  `PERAN` varchar(20) NOT NULL, -- peran : 'PJMK', 'wakil PJMK', 'anggota'
+  `PERAN` varchar(20) NOT NULL COMMENT 'peran/role: "PJMK", "wakil PJMK", "anggota"',
   `JOINED_AT` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -81,7 +81,7 @@ CREATE TABLE `notification` (
   `NOTIF_ID` varchar(36) NOT NULL,
   `TASK_ID` varchar(36) DEFAULT NULL,
   `USER_ID` varchar(36) NOT NULL,
-  `JENIS` varchar(20) NOT NULL,
+  `JENIS` varchar(20) NOT NULL COMMENT 'jenis notifikasi: tugas baru, deadline diubah, deadline dekat',
   `PESAN` varchar(255) NOT NULL,
   `WAKTU_KIRIM` timestamp NOT NULL DEFAULT current_timestamp(),
   `IS_READ` smallint(6) NOT NULL DEFAULT 0
@@ -97,7 +97,7 @@ CREATE TABLE `status_tugas` (
   `STATUS_ID` varchar(36) NOT NULL,
   `TASK_ID` varchar(36) NOT NULL,
   `USER_ID` varchar(36) NOT NULL,
-  `STATUS` varchar(20) NOT NULL, -- status : 'belum dikerjakan', 'selesai'
+  `STATUS` varchar(20) NOT NULL COMMENT 'status: "belum dikerjakan", "selesai"',
   `UPDATED_AT` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
