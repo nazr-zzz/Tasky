@@ -1,17 +1,18 @@
 import express from "express";
 import taskRoutes from "./routes/tasks.js";
+import authRoutes from "./routes/auth.js";
 
 const app = express();
 
-// 1. Middleware wajib agar Express bisa membaca data format JSON dari POST/PUT request
 app.use(express.json());
 
-// 2. Daftarkan router untuk endpoint /tasks
 app.use("/tasks", taskRoutes);
+app.use("/api/auth", authRoutes);
 
-// 3. Route dasar untuk tes server
 app.get("/", (req, res) => {
-  res.json({ pesan: "Server Tasky berjalan dengan baik!" });
+  res.json({
+    pesan: "Server Tasky berjalan dengan baik!",
+  });
 });
 
 export default app;
