@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -8,73 +8,81 @@ import {
   StatusBar,
   SafeAreaView,
   Alert,
-  Clipboard,
+  ActivityIndicator,
 } from "react-native";
-import { updateMemberRole } from "../services/api";
+import * as Clipboard from "expo-clipboard";
+import { fetchClassMembers, updateMemberRole } from "../services/api";
 
-export default function AnggotaKelasScreen({
-  kelas,
-  currentUser,
-  onBack,
-}) {
-  const currentClass = kelas || {
-    name: "Teknik Informatika 2021",
-    sub: "Reguler A • 48 Mahasiswa Terdaftar",
-    code: "TI21-A89K",
+// Samakan nilai peran dari server menjadi 3 jenis peran yang dipakai tampilan
+function normalisasiPeran(peran) {
+  const p = String(peran || "");
+  if (p.includes("Pendamping")) return "PJMK Pendamping";
+  if (p.includes("PJMK") || p.toLowerCase().includes("admin")) return "PJMK Utama";
+  return "Mahasiswa";
+}
+
+function ambilInisial(nama) {
+  const bagian = String(nama || "?").trim().split(/\s+/);
+  const huruf = bagian.slice(0, 2).map((b) => b.charAt(0).toUpperCase());
+  return huruf.join("") || "?";
+}
+
+function mapMember(m, currentUserId) {
+  const id = m.USER_ID ?? m.user_id ?? m.id;
+  const role = normalisasiPeran(m.PERAN ?? m.peran ?? m.ROLE ?? m.role);
+  const name = m.NAMA ?? m.nama ?? "-";
+  return {
+    id,
+    name,
+    nim: m.NIM ?? m.nim ?? "-",
+    role,
+    isSelf: String(id) === String(currentUserId),
+    initials: ambilInisial(name),
+    subText:
+      role === "PJMK Pendamping"
+        ? "Dapat menambah & mengubah tugas kuliah"
+        : undefined,
+  };
+}
+
+export default function AnggotaKelasScreen({ kelas, currentUser, onBack }) {
+  const kelasId = kelas?.kelas_id;
+  const kodeKelas = kelas?.code || kelas?.kode_kelas || "-";
+  const namaKelas = kelas?.name || kelas?.nama_kelas || "Kelas";
+
+  // Hanya PJMK Utama yang boleh mengangkat PJMK Pendamping
+  const isPJMKUtama =
+    !!kelas?.isPjmk && !String(kelas?.role || "").includes("Pendamping");
+
+  const [members, setMembers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [promotingId, setPromotingId] = useState(null);
+
+  const loadMembers = async () => {
+    setError("");
+    setLoading(true);
+    try {
+      const data = await fetchClassMembers(kelasId);
+      const list = Array.isArray(data) ? data : [];
+      setMembers(list.map((m) => mapMember(m, currentUser?.userId)));
+    } catch (e) {
+      setError(e?.message || "Gagal memuat anggota kelas.");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const isPJMK =
-    currentUser?.role?.includes("PJMK") ||
-    currentUser?.email?.includes("pjmk") ||
-    currentUser?.nama?.includes("Dimas");
+  useEffect(() => {
+    if (!kelasId) {
+      setError("Data kelas tidak ditemukan.");
+      setLoading(false);
+      return;
+    }
+    loadMembers();
+  }, [kelasId]);
 
-  const [members, setMembers] = useState([
-    {
-      id: "u_dimas",
-      name: "Dimas Pratama",
-      isSelf: true,
-      nim: "2108561042",
-      role: "PJMK Utama",
-      statusText: "Status: Aktif sebagai Penanggung Jawab",
-      accessText: "Akses Penuh",
-      initials: "DP",
-    },
-    {
-      id: "u_anindya",
-      name: "Anindya Putri M",
-      isSelf: false,
-      nim: "2108561015",
-      role: "PJMK Pendamping",
-      subText: "Dapat menambah & mengubah tugas kuliah",
-      initials: "AP",
-    },
-    {
-      id: "u_bagus",
-      name: "Bagus Wicaksono",
-      isSelf: false,
-      nim: "2108561029",
-      role: "Mahasiswa",
-      initials: "BW",
-    },
-    {
-      id: "u_citra",
-      name: "Citra Dewi Lestari",
-      isSelf: false,
-      nim: "2108561033",
-      role: "Mahasiswa",
-      initials: "CD",
-    },
-    {
-      id: "u_fajar",
-      name: "Fajar Nugraha",
-      isSelf: false,
-      nim: "2108561049",
-      role: "Mahasiswa",
-      initials: "FN",
-    },
-  ]);
-
-  const handlePromote = async (member) => {
+  const handlePromote = (member) => {
     Alert.alert(
       "Angkat PJMK Pendamping",
       `Apakah Anda yakin ingin mengangkat "${member.name}" sebagai PJMK Pendamping kelas ini? Dia akan memiliki hak untuk menambah dan mengubah tugas kuliah.`,
@@ -83,41 +91,47 @@ export default function AnggotaKelasScreen({
         {
           text: "Angkat Sekarang",
           onPress: async () => {
-            setMembers((prev) =>
-              prev.map((m) =>
-                m.id === member.id
-                  ? {
-                      ...m,
-                      role: "PJMK Pendamping",
-                      subText: "Dapat menambah & mengubah tugas kuliah",
-                    }
-                  : m
-              )
-            );
-
+            setPromotingId(member.id);
             try {
-              await updateMemberRole(
-                currentClass.kelas_id || "k_ti21",
-                member.id,
-                "PJMK Pendamping"
+              // Kirim ke server dulu, ubah tampilan hanya jika berhasil
+              await updateMemberRole(kelasId, member.id, "PJMK Pendamping");
+              setMembers((prev) =>
+                prev.map((m) =>
+                  m.id === member.id
+                    ? {
+                        ...m,
+                        role: "PJMK Pendamping",
+                        subText: "Dapat menambah & mengubah tugas kuliah",
+                      }
+                    : m
+                )
+              );
+              Alert.alert(
+                "Sukses! 👑",
+                `${member.name} sekarang aktif sebagai PJMK Pendamping.`
               );
             } catch (e) {
-              // Tersimpan lokal
+              Alert.alert(
+                "Gagal Mengubah Peran",
+                e?.message || "Tidak dapat terhubung ke server."
+              );
+            } finally {
+              setPromotingId(null);
             }
-
-            Alert.alert("Sukses! 👑", `${member.name} sekarang aktif sebagai PJMK Pendamping.`);
           },
         },
       ]
     );
   };
 
-  const handleCopyCode = () => {
-    const code = currentClass.code || currentClass.kode_kelas || "TI21-A89K";
-    if (Clipboard && Clipboard.setString) {
-      Clipboard.setString(code);
+  const handleCopyCode = async () => {
+    if (!kodeKelas || kodeKelas === "-") return;
+    try {
+      await Clipboard.setStringAsync(String(kodeKelas));
+      Alert.alert("Disalin! 📋", `Kode kelas "${kodeKelas}" telah disalin.`);
+    } catch (e) {
+      Alert.alert("Gagal", "Kode kelas tidak dapat disalin.");
     }
-    Alert.alert("Disalin! 📋", `Kode kelas "${code}" telah disalin.`);
   };
 
   return (
@@ -129,10 +143,10 @@ export default function AnggotaKelasScreen({
         <TouchableOpacity style={styles.backBtn} onPress={onBack}>
           <Text style={styles.backIcon}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Detail Tugas</Text>
+        <Text style={styles.headerTitle}>Anggota Kelas</Text>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>
-            {(currentUser?.nama || "D").charAt(0).toUpperCase()}
+            {(currentUser?.nama || "?").charAt(0).toUpperCase()}
           </Text>
         </View>
       </View>
@@ -141,35 +155,23 @@ export default function AnggotaKelasScreen({
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}
       >
-        {/* STRIP OFFLINE */}
-        <View style={styles.offlineStrip}>
-          <Text style={styles.offlineStripText}>
-            ⚠️ Sinkronisasi offline aktif • Tersimpan lokal 🟢
-          </Text>
-        </View>
-
         {/* CLASS INFO BOX */}
         <View style={styles.classInfoBox}>
           <View style={styles.semesterRow}>
-            <Text style={styles.semesterTag}>🎓 SEMESTER GANJIL 2024/2025</Text>
+            <Text style={styles.semesterTag}>🎓 INFORMASI KELAS</Text>
             <View style={styles.miniGroupIconBox}>
               <Text style={styles.miniGroupIcon}>👥</Text>
             </View>
           </View>
 
-          <Text style={styles.classTitle}>
-            {currentClass.name || "Teknik Informatika 2021"}
-          </Text>
+          <Text style={styles.classTitle}>{namaKelas}</Text>
           <Text style={styles.classSub}>
-            {currentClass.sub || "Reguler A • 48 Mahasiswa Terdaftar"}
+            {loading ? "Memuat anggota..." : `${members.length} Anggota Terdaftar`}
           </Text>
 
           <View style={styles.codeRow}>
             <Text style={styles.codeLabel}>
-              Kode Kelas:{" "}
-              <Text style={styles.codeValue}>
-                {currentClass.code || currentClass.kode_kelas || "TI21-A89K"}
-              </Text>
+              Kode Kelas: <Text style={styles.codeValue}>{kodeKelas}</Text>
             </Text>
             <TouchableOpacity style={styles.copyPill} onPress={handleCopyCode}>
               <Text style={styles.copyPillText}>📋 Salin</Text>
@@ -178,7 +180,7 @@ export default function AnggotaKelasScreen({
         </View>
 
         {/* BANNER KEWENANGAN PJMK UTAMA */}
-        {isPJMK && (
+        {isPJMKUtama && (
           <View style={styles.pjmkBanner}>
             <View style={styles.pjmkIconBox}>
               <Text style={styles.pjmkIcon}>🛡️</Text>
@@ -197,114 +199,133 @@ export default function AnggotaKelasScreen({
         {/* SECTION DAFTAR ANGGOTA */}
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionTitle}>
-            Daftar Anggota ({members.length} Ditampilkan)
+            Daftar Anggota ({members.length})
           </Text>
-          <Text style={styles.filterText}>Semua</Text>
         </View>
 
-        {/* LIST MEMBERS */}
-        {members.map((member) => (
-          <View
-            key={member.id}
-            style={[
-              styles.memberCard,
-              member.isSelf && styles.memberCardSelf,
-            ]}
-          >
-            <View style={styles.memberTopRow}>
-              <View
-                style={[
-                  styles.memberAvatar,
-                  member.isSelf ? styles.avatarPJMK : styles.avatarMhs,
-                ]}
-              >
-                <Text
+        {/* STATUS: MEMUAT / ERROR / KOSONG / DAFTAR */}
+        {loading ? (
+          <View style={styles.stateBox}>
+            <ActivityIndicator size="large" color="#073B82" />
+            <Text style={styles.stateText}>Memuat anggota dari server...</Text>
+          </View>
+        ) : error ? (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorTitle}>Gagal Memuat Anggota</Text>
+            <Text style={styles.errorDesc}>{error}</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={loadMembers}>
+              <Text style={styles.retryBtnText}>🔄 Coba Lagi</Text>
+            </TouchableOpacity>
+          </View>
+        ) : members.length === 0 ? (
+          <View style={styles.stateBox}>
+            <Text style={styles.stateText}>Belum ada anggota di kelas ini.</Text>
+          </View>
+        ) : (
+          members.map((member) => (
+            <View
+              key={member.id}
+              style={[styles.memberCard, member.isSelf && styles.memberCardSelf]}
+            >
+              <View style={styles.memberTopRow}>
+                <View
                   style={[
-                    styles.avatarInitials,
-                    member.isSelf ? styles.initialsPJMK : styles.initialsMhs,
+                    styles.memberAvatar,
+                    member.role !== "Mahasiswa" ? styles.avatarPJMK : styles.avatarMhs,
                   ]}
                 >
-                  {member.initials}
-                </Text>
-              </View>
-
-              <View style={styles.memberInfo}>
-                <View style={styles.memberNameRow}>
-                  <Text style={styles.memberName}>
-                    {member.name}{" "}
-                    {member.isSelf ? (
-                      <Text style={styles.selfLabel}>Anda</Text>
-                    ) : null}
-                  </Text>
-                  <View
+                  <Text
                     style={[
-                      styles.roleBadge,
-                      member.role === "PJMK Utama"
-                        ? styles.badgeUtama
-                        : member.role === "PJMK Pendamping"
-                        ? styles.badgePendamping
-                        : styles.badgeMhs,
+                      styles.avatarInitials,
+                      member.role !== "Mahasiswa"
+                        ? styles.initialsPJMK
+                        : styles.initialsMhs,
                     ]}
                   >
-                    <Text
-                      style={[
-                        styles.roleBadgeText,
-                        member.role === "PJMK Utama"
-                          ? styles.textUtama
-                          : member.role === "PJMK Pendamping"
-                          ? styles.textPendamping
-                          : styles.textMhs,
-                      ]}
-                    >
-                      {member.role === "PJMK Utama" ? "👑 " : member.role === "PJMK Pendamping" ? "👥 " : ""}
-                      {member.role}
-                    </Text>
-                  </View>
+                    {member.initials}
+                  </Text>
                 </View>
 
-                <Text style={styles.nimText}>NIM {member.nim}</Text>
-
-                {member.statusText && (
-                  <View style={styles.statusPillsRow}>
-                    <Text style={styles.activeStatusText}>
-                      🟢 {member.statusText}
+                <View style={styles.memberInfo}>
+                  <View style={styles.memberNameRow}>
+                    <Text style={styles.memberName}>
+                      {member.name}{" "}
+                      {member.isSelf ? (
+                        <Text style={styles.selfLabel}>Anda</Text>
+                      ) : null}
                     </Text>
-                    {member.accessText && (
-                      <View style={styles.accessBadge}>
-                        <Text style={styles.accessText}>{member.accessText}</Text>
-                      </View>
-                    )}
+                    <View
+                      style={[
+                        styles.roleBadge,
+                        member.role === "PJMK Utama"
+                          ? styles.badgeUtama
+                          : member.role === "PJMK Pendamping"
+                          ? styles.badgePendamping
+                          : styles.badgeMhs,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.roleBadgeText,
+                          member.role === "PJMK Utama"
+                            ? styles.textUtama
+                            : member.role === "PJMK Pendamping"
+                            ? styles.textPendamping
+                            : styles.textMhs,
+                        ]}
+                      >
+                        {member.role === "PJMK Utama"
+                          ? "👑 "
+                          : member.role === "PJMK Pendamping"
+                          ? "👥 "
+                          : ""}
+                        {member.role}
+                      </Text>
+                    </View>
                   </View>
-                )}
 
-                {member.subText && (
-                  <Text style={styles.subText}>{member.subText}</Text>
-                )}
+                  <Text style={styles.nimText}>NIM {member.nim}</Text>
 
-                {/* TOMBOL JADIKAN PJMK PENDAMPING (KHUSUS MAHASISWA & JIKA USER ADALAH PJMK) */}
-                {isPJMK && member.role === "Mahasiswa" && (
-                  <TouchableOpacity
-                    style={styles.promoteBtn}
-                    onPress={() => handlePromote(member)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.promoteBtnText}>
-                      👥+ Jadikan PJMK Pendamping
-                    </Text>
-                  </TouchableOpacity>
-                )}
+                  {member.role === "PJMK Utama" && (
+                    <View style={styles.statusPillsRow}>
+                      <Text style={styles.activeStatusText}>
+                        🟢 Penanggung Jawab Kelas
+                      </Text>
+                      <View style={styles.accessBadge}>
+                        <Text style={styles.accessText}>Akses Penuh</Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {member.subText ? (
+                    <Text style={styles.subText}>{member.subText}</Text>
+                  ) : null}
+
+                  {/* TOMBOL JADIKAN PJMK PENDAMPING (HANYA UNTUK PJMK UTAMA) */}
+                  {isPJMKUtama && member.role === "Mahasiswa" && !member.isSelf && (
+                    <TouchableOpacity
+                      style={[
+                        styles.promoteBtn,
+                        promotingId === member.id && styles.promoteBtnDisabled,
+                      ]}
+                      onPress={() => handlePromote(member)}
+                      disabled={promotingId === member.id}
+                      activeOpacity={0.8}
+                    >
+                      {promotingId === member.id ? (
+                        <ActivityIndicator size="small" color="#1D4ED8" />
+                      ) : (
+                        <Text style={styles.promoteBtnText}>
+                          👥+ Jadikan PJMK Pendamping
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
             </View>
-          </View>
-        ))}
-
-        {/* FOOTER NOTE */}
-        <View style={styles.footerNoteBox}>
-          <Text style={styles.footerNoteText}>
-            ⓘ Daftar mahasiswa diperbarui otomatis via SIAKAD. Fitur pesan
-            pribadi sengaja dinonaktifkan demi fokus akademik.
-          </Text>
-        </View>
+          ))
+        )}
 
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -361,23 +382,8 @@ const styles = StyleSheet.create({
   },
   container: {
     paddingHorizontal: 18,
-    paddingTop: 12,
+    paddingTop: 14,
     paddingBottom: 40,
-  },
-  offlineStrip: {
-    backgroundColor: "#FEF3C7",
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginBottom: 14,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#FDE68A",
-  },
-  offlineStripText: {
-    fontSize: 11,
-    color: "#92400E",
-    fontWeight: "600",
   },
   classInfoBox: {
     backgroundColor: "#FFFFFF",
@@ -499,9 +505,48 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#102A36",
   },
-  filterText: {
-    fontSize: 11,
+  stateBox: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 32,
+    gap: 10,
+  },
+  stateText: {
+    fontSize: 12,
     color: "#64748B",
+    fontWeight: "600",
+  },
+  errorBox: {
+    backgroundColor: "#FEF2F2",
+    borderRadius: 16,
+    padding: 18,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+  },
+  errorTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#B91C1C",
+  },
+  errorDesc: {
+    fontSize: 12,
+    color: "#7F1D1D",
+    textAlign: "center",
+    lineHeight: 18,
+    marginTop: 6,
+    marginBottom: 12,
+  },
+  retryBtn: {
+    backgroundColor: "#073B82",
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 18,
+  },
+  retryBtnText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "800",
   },
   memberCard: {
     backgroundColor: "#FFFFFF",
@@ -553,6 +598,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   memberName: {
+    flex: 1,
     fontSize: 13,
     fontWeight: "800",
     color: "#102A36",
@@ -631,20 +677,15 @@ const styles = StyleSheet.create({
     marginTop: 8,
     borderWidth: 1,
     borderColor: "#BFDBFE",
+    minWidth: 60,
+    alignItems: "center",
+  },
+  promoteBtnDisabled: {
+    opacity: 0.6,
   },
   promoteBtnText: {
     fontSize: 11,
     fontWeight: "700",
     color: "#1D4ED8",
-  },
-  footerNoteBox: {
-    paddingVertical: 12,
-    paddingHorizontal: 4,
-  },
-  footerNoteText: {
-    fontSize: 11,
-    color: "#94A3B8",
-    textAlign: "center",
-    lineHeight: 16,
   },
 });

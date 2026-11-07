@@ -13,43 +13,23 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { loginUser, registerUser } from "../services/auth";
-import { getBaseUrl } from "../services/api";
 
 export default function LoginScreen() {
-  // Mode tab: "daftar" | "masuk" (Sesuai Image 1 Desain Baru)
+  // Mode tab: "daftar" | "masuk"
   const [authMode, setAuthMode] = useState("masuk");
 
-  // Form states
+  // Form states (kosong, tanpa akun demo)
   const [nama, setNama] = useState("");
   const [nim, setNim] = useState("");
-  const [email, setEmail] = useState("pjmk@kampus.ac.id");
-  const [password, setPassword] = useState("pjmk123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [agreed, setAgreed] = useState(true);
   const [loading, setLoading] = useState(false);
 
-  // Pintasan login cepat untuk pengujian PJMK vs Mahasiswa Baru
-  const handleQuickLogin = (role) => {
-    if (role === "pjmk") {
-      setEmail("pjmk@kampus.ac.id");
-      setPassword("pjmk123");
-      setNama("Dimas Pratama");
-      setNim("2108561042");
-    } else if (role === "mhs_baru") {
-      setEmail("mhs.baru@kampus.ac.id");
-      setPassword("mhs123");
-      setNama("Mahasiswa Baru");
-      setNim("2108569999");
-    } else if (role === "nazril") {
-      setEmail("nazril@gmail.com");
-      setPassword("password123");
-      setNama("Nazril Febry Fadli");
-      setNim("09020605066");
-    }
-  };
-
   const handleSubmit = async () => {
     if (authMode === "daftar") {
+      // ==================== DAFTAR ====================
       if (!nama.trim() || !nim.trim() || !email.trim() || !password) {
         Alert.alert("Perhatian", "Semua kolom pendaftaran wajib diisi.");
         return;
@@ -61,46 +41,28 @@ export default function LoginScreen() {
 
       setLoading(true);
       try {
-        const res = await registerUser(nama.trim(), nim.trim(), email.trim(), password);
+        await registerUser(nama.trim(), nim.trim(), email.trim(), password);
         Alert.alert(
           "Pendaftaran Berhasil! 🎉",
-          "Akun Anda telah berhasil dibuat. Silakan beralih ke tab Masuk untuk membuka aplikasi.",
+          "Akun Anda telah berhasil dibuat. Silakan masuk untuk membuka aplikasi.",
           [
             {
               text: "Masuk Sekarang",
-              onPress: () => setAuthMode("masuk"),
-            },
-          ]
-        );
-      } catch (err) {
-        // Fallback pendaftaran lokal jika server offline
-        Alert.alert(
-          "Akun Tersimpan Lokal 💾",
-          "Server offline, akun baru Anda otomatis dibuat dalam mode offline.",
-          [
-            {
-              text: "Lanjutkan ke Aplikasi",
               onPress: () => {
-                router.replace({
-                  pathname: "/dashboard",
-                  params: {
-                    userId: "u_new_" + Date.now(),
-                    nama: nama.trim(),
-                    nim: nim.trim(),
-                    email: email.trim(),
-                    role: "Mahasiswa",
-                    isNewUser: "true",
-                  },
-                });
+                setPassword("");
+                setAuthMode("masuk");
               },
             },
           ]
         );
+      } catch (err) {
+        // Online-only: tampilkan error apa adanya, tidak ada akun lokal
+        Alert.alert("Pendaftaran Gagal", err.message || "Tidak dapat terhubung ke server.");
       } finally {
         setLoading(false);
       }
     } else {
-      // MODE MASUK
+      // ==================== MASUK ====================
       if (!email.trim() || !password) {
         Alert.alert("Perhatian", "Email/NIM dan kata sandi wajib diisi.");
         return;
@@ -109,54 +71,28 @@ export default function LoginScreen() {
       setLoading(true);
       try {
         const result = await loginUser(email.trim(), password);
-        const userData = result.user || {};
+        const userData = result?.user;
+        const userId = userData?.userId || userData?.USER_ID;
 
-        const isPjmk =
-          email.toLowerCase().includes("pjmk") ||
-          (userData.nama && userData.nama.toLowerCase().includes("dimas"));
+        // Pastikan server benar-benar mengembalikan data pengguna
+        if (!userId) {
+          Alert.alert("Login Gagal", "Respons server tidak valid. Hubungi admin.");
+          return;
+        }
 
         router.replace({
           pathname: "/dashboard",
           params: {
-            userId: userData.userId || userData.USER_ID || "u1",
-            nama: userData.nama || userData.NAMA || (isPjmk ? "Dimas Pratama" : "Mahasiswa"),
-            nim: userData.nim || userData.NIM || (isPjmk ? "2108561042" : "2108561029"),
+            userId: String(userId),
+            nama: userData.nama || userData.NAMA || "",
+            nim: userData.nim || userData.NIM || "",
             email: userData.email || userData.EMAIL || email.trim(),
-            role: isPjmk ? "PJMK Utama" : "Mahasiswa",
-            isNewUser: email.includes("baru") ? "true" : "false",
+            role: userData.role || userData.ROLE || "Mahasiswa",
           },
         });
       } catch (error) {
-        // Jika koneksi server gagal atau mode demo offline
-        const isPjmk =
-          email.toLowerCase().includes("pjmk") ||
-          email.toLowerCase().includes("dimas");
-
-        const isMhsBaru = email.toLowerCase().includes("baru");
-
-        Alert.alert(
-          "Masuk Mode Offline ⚠️",
-          `Tidak dapat terhubung ke database server.\n\nMasuk menggunakan mode penyimpanan lokal perangkat?`,
-          [
-            { text: "Batal", style: "cancel" },
-            {
-              text: "Lanjutkan Offline",
-              onPress: () => {
-                router.replace({
-                  pathname: "/dashboard",
-                  params: {
-                    userId: isPjmk ? "u_pjmk_dimas" : "u_mhs_baru",
-                    nama: isPjmk ? "Dimas Pratama" : isMhsBaru ? "Mahasiswa Baru" : "Nazril Febry",
-                    nim: isPjmk ? "2108561042" : "2108569999",
-                    email: email.trim(),
-                    role: isPjmk ? "PJMK Utama" : "Mahasiswa",
-                    isNewUser: isMhsBaru ? "true" : "false",
-                  },
-                });
-              },
-            },
-          ]
-        );
+        // Online-only: tampilkan error apa adanya, tidak ada mode offline
+        Alert.alert("Login Gagal", error.message || "Tidak dapat terhubung ke server.");
       } finally {
         setLoading(false);
       }
@@ -172,15 +108,7 @@ export default function LoginScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* TOP PILL: DATA LOKAL TERSIMPAN AMAN */}
-        <View style={styles.topPill}>
-          <Text style={styles.topPillIcon}>👥</Text>
-          <Text style={styles.topPillText}>
-            Data lokal tersimpan aman di perangkat
-          </Text>
-        </View>
-
-        {/* LOGO & BRAND HEADER SESUAI GAMBAR 1 */}
+        {/* LOGO & BRAND HEADER */}
         <View style={styles.brandHeader}>
           <View style={styles.logoBox}>
             <Text style={styles.logoLetter}>T</Text>
@@ -247,7 +175,7 @@ export default function LoginScreen() {
                 <Text style={styles.inputPrefix}>🪪</Text>
                 <TextInput
                   style={styles.textInput}
-                  placeholder="Dimas Pratama"
+                  placeholder="Nama lengkap Anda"
                   placeholderTextColor="#94A3B8"
                   value={nama}
                   onChangeText={setNama}
@@ -263,7 +191,7 @@ export default function LoginScreen() {
                 <Text style={styles.inputPrefix}>#</Text>
                 <TextInput
                   style={styles.textInput}
-                  placeholder="2108561042"
+                  placeholder="Masukkan NIM"
                   placeholderTextColor="#94A3B8"
                   value={nim}
                   onChangeText={setNim}
@@ -284,7 +212,7 @@ export default function LoginScreen() {
               placeholder={
                 authMode === "daftar"
                   ? "mahasiswa@kampus.ac.id"
-                  : "pjmk@kampus.ac.id atau 2108561042"
+                  : "email@kampus.ac.id atau NIM"
               }
               placeholderTextColor="#94A3B8"
               value={email}
@@ -305,6 +233,7 @@ export default function LoginScreen() {
               value={password}
               onChangeText={setPassword}
               secureTextEntry={!showPassword}
+              autoCapitalize="none"
             />
             <TouchableOpacity
               onPress={() => setShowPassword(!showPassword)}
@@ -325,44 +254,10 @@ export default function LoginScreen() {
                 {agreed && <Text style={styles.checkMark}>✓</Text>}
               </View>
               <Text style={styles.agreeText}>
-                Saya menyetujui sinkronisasi jadwal perkuliahan dan penyimpanan tugas
-                lokal di perangkat ini.
+                Saya menyetujui sinkronisasi jadwal perkuliahan dan penyimpanan
+                data tugas di server.
               </Text>
             </TouchableOpacity>
-          )}
-
-          {/* PINTASAN AKUN UNTUK PENGUJIAN FITUR (MASUK) */}
-          {authMode === "masuk" && (
-            <View style={styles.quickAccountsSection}>
-              <Text style={styles.quickAccountsTitle}>
-                ⚡ Pintasan Akun Cepat (Sesuai Catatan SRS):
-              </Text>
-              <View style={styles.quickBtnGroup}>
-                <TouchableOpacity
-                  style={[
-                    styles.quickAccountPill,
-                    email.includes("pjmk") && styles.quickAccountPillActive,
-                  ]}
-                  onPress={() => handleQuickLogin("pjmk")}
-                >
-                  <Text style={styles.quickAccountPillText}>
-                    👑 Akun PJMK (Dimas Pratama)
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.quickAccountPill,
-                    email.includes("baru") && styles.quickAccountPillActive,
-                  ]}
-                  onPress={() => handleQuickLogin("mhs_baru")}
-                >
-                  <Text style={styles.quickAccountPillText}>
-                    🧑‍🎓 Mahasiswa Baru (0 Kelas)
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
           )}
 
           {/* TOMBOL UTAMA */}
@@ -382,7 +277,7 @@ export default function LoginScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* INFO FOOTER: TERINTEGRASI DENGAN JADWAL KULIAH */}
+        {/* INFO FOOTER */}
         <View style={styles.featureCard}>
           <View style={styles.featureIconCircle}>
             <Text style={styles.featureIcon}>🎓</Text>
@@ -393,8 +288,7 @@ export default function LoginScreen() {
             </Text>
             <Text style={styles.featureDesc}>
               Kelola tenggat waktu per mata kuliah, notifikasi otomatis sebelum
-              kuliah dimulai, dan pembagian tugas kelompok tanpa koneksi internet
-              terus-menerus.
+              kuliah dimulai, dan pembagian tugas kelompok dalam satu aplikasi.
             </Text>
           </View>
         </View>
@@ -411,30 +305,8 @@ const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
     paddingHorizontal: 22,
-    paddingTop: 16,
+    paddingTop: 32,
     paddingBottom: 36,
-  },
-  topPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#F1F5F9",
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    alignSelf: "center",
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
-  },
-  topPillIcon: {
-    fontSize: 12,
-    marginRight: 6,
-  },
-  topPillText: {
-    fontSize: 11,
-    color: "#475467",
-    fontWeight: "600",
   },
   brandHeader: {
     alignItems: "center",
@@ -603,41 +475,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: "#64748B",
     lineHeight: 16,
-  },
-  quickAccountsSection: {
-    marginVertical: 10,
-    padding: 10,
-    backgroundColor: "#F8FAFC",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
-  },
-  quickAccountsTitle: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#073B82",
-    marginBottom: 8,
-  },
-  quickBtnGroup: {
-    flexDirection: "column",
-    gap: 6,
-  },
-  quickAccountPill: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 8,
-    paddingVertical: 7,
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    borderColor: "#CBD5E1",
-  },
-  quickAccountPillActive: {
-    borderColor: "#073B82",
-    backgroundColor: "#EBF3FC",
-  },
-  quickAccountPillText: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#102A36",
   },
   mainSubmitBtn: {
     backgroundColor: "#073B82",

@@ -27,60 +27,32 @@ export default function GabungKelasScreen({
       return;
     }
 
+    if (!currentUser?.userId) {
+      Alert.alert("Sesi Berakhir", "Silakan login ulang.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await joinClass(
-        kodeKelas.trim().toUpperCase(),
-        currentUser?.userId || "u_mhs_baru"
+      const kode = kodeKelas.trim().toUpperCase();
+      const res = await joinClass(kode, currentUser.userId);
+
+      const targetClass = res?.kelas || { kode_kelas: kode };
+      const namaKelas = targetClass.nama_kelas ?? targetClass.NAMA_KELAS ?? targetClass.name;
+
+      Alert.alert(
+        "Berhasil Bergabung! 🎉",
+        namaKelas
+          ? `Selamat! Anda telah resmi bergabung ke kelas "${namaKelas}".`
+          : "Selamat! Anda telah resmi bergabung ke kelas."
       );
-
-      const targetClass = res.kelas || {
-        name: "Teknik Informatika 2021 - Reguler A",
-        code: kodeKelas.trim().toUpperCase(),
-        room: "Fakultas MIPA • Universitas Udayana",
-        role: "Mahasiswa",
-        members: 48,
-        activeTasks: 3,
-        kelas_id: "k_ti21",
-        kode_kelas: kodeKelas.trim().toUpperCase(),
-        nama_kelas: "Teknik Informatika 2021 - Reguler A",
-      };
-
-      Alert.alert("Berhasil Bergabung! 🎉", `Selamat! Anda telah resmi bergabung ke kelas "${targetClass.name || targetClass.nama_kelas}".`);
-      if (onClassJoined) onClassJoined(targetClass);
+      if (onClassJoined) await onClassJoined(targetClass);
       if (onBack) onBack();
     } catch (e) {
-      // Fallback offline jika server tidak tersambung
-      const cleanCode = kodeKelas.trim().toUpperCase();
-      let matchedName = "Teknik Informatika 2021 - Reguler A";
-      let matchedRoom = "Fakultas MIPA • Universitas Udayana";
-      let matchedTasks = 3;
-
-      if (cleanCode === "SIM-B02") {
-        matchedName = "Sistem Informasi Manajemen - B";
-        matchedRoom = "Dosen: Dr. I Wayan Santika, S.T., M.Kom.";
-        matchedTasks = 2;
-      } else if (cleanCode === "KBDS-21") {
-        matchedName = "Kecerdasan Buatan & Data Science - 2021";
-        matchedRoom = "Laboratorium Komputasi Cerdas";
-        matchedTasks = 2;
-      }
-
-      const joinedCls = {
-        name: matchedName,
-        code: cleanCode,
-        room: matchedRoom,
-        role: "Mahasiswa",
-        members: 48,
-        activeTasks: matchedTasks,
-        kelas_id: "k_" + cleanCode,
-        kode_kelas: cleanCode,
-        nama_kelas: matchedName,
-      };
-
-      Alert.alert("Berhasil Bergabung (Mode Offline) 🎉", `Anda telah bergabung ke kelas "${matchedName}".`);
-      if (onClassJoined) onClassJoined(joinedCls);
-      if (onBack) onBack();
+      Alert.alert(
+        "Gagal Bergabung",
+        e?.message || "Kode kelas tidak valid atau server tidak dapat dihubungi."
+      );
     } finally {
       setLoading(false);
     }
@@ -95,10 +67,10 @@ export default function GabungKelasScreen({
         <TouchableOpacity style={styles.backBtn} onPress={onBack}>
           <Text style={styles.backIcon}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Detail Tugas</Text>
+        <Text style={styles.headerTitle}>Gabung Kelas</Text>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>
-            {(currentUser?.nama || "M").charAt(0).toUpperCase()}
+            {(currentUser?.nama || "?").charAt(0).toUpperCase()}
           </Text>
         </View>
       </View>
@@ -107,13 +79,6 @@ export default function GabungKelasScreen({
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}
       >
-        {/* STRIP MODE OFFLINE */}
-        <View style={styles.offlineStrip}>
-          <Text style={styles.offlineStripText}>
-            ⚠️ Data kelas akan disinkronkan saat terhubung kembali 🔄
-          </Text>
-        </View>
-
         {/* ILUSTRASI ICON GABUNG KELAS */}
         <View style={styles.heroSection}>
           <View style={styles.heroCircle}>
@@ -261,21 +226,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingTop: 8,
     paddingBottom: 40,
-  },
-  offlineStrip: {
-    backgroundColor: "#FEF3C7",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginBottom: 20,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#FDE68A",
-  },
-  offlineStripText: {
-    fontSize: 11,
-    color: "#92400E",
-    fontWeight: "600",
   },
   heroSection: {
     alignItems: "center",

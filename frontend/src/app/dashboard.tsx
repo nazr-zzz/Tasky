@@ -11,6 +11,7 @@ import {
   Modal,
   TextInput,
   ActivityIndicator,
+  RefreshControl,
 } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
 
@@ -31,7 +32,6 @@ import {
   deleteTask,
   fetchClasses,
   checkServerConnection,
-  getBaseUrl,
   setCustomBaseUrl,
   CURRENT_LAN_IP,
   BACKEND_PORT,
@@ -65,119 +65,81 @@ const COLORS = {
   greenStatus: "#10B981",
 };
 
-// Data Default Kelas PJMK (Dimas Pratama) sesuai Mockup Desain Terbaru
-const DEFAULT_PJMK_CLASSES = [
-  {
-    kelas_id: "k_ti21",
-    kode_kelas: "TI21-A89K",
-    code: "TI21-A89K",
-    name: "Teknik Informatika 2021 - Reguler A",
-    nama_kelas: "Teknik Informatika 2021 - Reguler A",
-    room: "Fakultas MIPA • Universitas Udayana",
-    role: "PJMK (Admin Kelas)",
-    isPjmk: true,
-    matkulCount: 4,
-    activeTasks: 5,
-    members: 48,
-    urgent: false,
-    urgentText: "",
-  },
-  {
-    kelas_id: "k_simb",
-    kode_kelas: "SIM-B02",
-    code: "SIM-B02",
-    name: "Sistem Informasi Manajemen - B",
-    nama_kelas: "Sistem Informasi Manajemen - B",
-    room: "Dosen: Dr. I Wayan Santika, S.T., M.Kom.",
-    role: "Mahasiswa",
-    isPjmk: false,
-    matkulCount: 3,
-    activeTasks: 2,
-    members: 38,
-    urgent: true,
-    urgentText: "2 Tugas Mendesak",
-    footerDeadline: "Deadline < 24 Jam",
-  },
-  {
-    kelas_id: "k_kbds",
-    kode_kelas: "KBDS-21",
-    code: "KBDS-21",
-    name: "Kecerdasan Buatan & Data Science - 2021",
-    nama_kelas: "Kecerdasan Buatan & Data Science - 2021",
-    room: "Laboratorium Komputasi Cerdas",
-    role: "PJMK Pendamping",
-    isPjmk: false,
-    matkulCount: 2,
-    activeTasks: 2,
-    members: 48,
-    urgent: false,
-    urgentText: "",
-  },
-];
+// =========================================================================
+// HELPER: pemetaan data dari server (tanpa data dummy)
+// =========================================================================
 
-// Data Default Tugas sesuai Mockup Desain Terbaru
-const DEFAULT_TASKS = [
-  {
-    id: "t_pwl_jwt",
-    kelas_id: "k_ti21",
-    subject: "Pemrograman Web Lanjut",
-    title: "Implementasi RESTful API & Autentikasi JWT",
-    deadline: "Kamis, 15 Nov 2024 • 23:59 WIB",
-    countdown: "1 Hari 4 Jam",
-    dosen: "Dr. Aris Munandar, M.Kom",
-    description:
-      "Buatlah endpoint autentikasi menggunakan format JSON Web Token (JWT) dengan refresh token. Pastikan skema database menyertakan tabel user, role, dan token whitelist. Struktur folder mengikuti MVC arsitektur bersih.",
-    creator: "Dicatat oleh PJMK (Dimas Pratama)",
-    status: "Belum Dikerjakan",
+// Ambil nilai string dari parameter route
+const asString = (v: any): string => (typeof v === "string" ? v : "");
+
+// Hitung sisa waktu dari string deadline (kosong jika format tidak dikenali)
+function hitungCountdown(deadline?: string): string {
+  if (!deadline) return "";
+  const d = new Date(deadline);
+  if (isNaN(d.getTime())) return "";
+  const diff = d.getTime() - Date.now();
+  if (diff <= 0) return "Lewat deadline";
+  const hari = Math.floor(diff / 86400000);
+  const jam = Math.floor((diff % 86400000) / 3600000);
+  return hari > 0 ? `${hari} Hari ${jam} Jam` : `${jam} Jam`;
+}
+
+function mapClass(c: any, userId: string) {
+  const kelasId = c.KELAS_ID ?? c.kelas_id;
+  const kode = c.KODE_KELAS ?? c.kode_kelas;
+  const nama = c.NAMA_KELAS ?? c.nama_kelas;
+  const peran: string = c.PERAN ?? c.peran ?? "";
+  const pembuat = String(c.DIBUAT_OLEH ?? c.dibuat_oleh ?? "") === String(userId);
+  const isPjmk = peran.includes("PJMK") || pembuat;
+
+  return {
+    kelas_id: kelasId,
+    kode_kelas: kode,
+    code: kode,
+    name: nama,
+    nama_kelas: nama,
+    room: c.RUANGAN ?? c.ruangan ?? "",
+    role: peran || (pembuat ? "PJMK (Admin Kelas)" : "Mahasiswa"),
+    isPjmk,
+    matkulCount: c.JUMLAH_MATKUL ?? c.jumlah_matkul ?? 0,
+    activeTasks: c.JUMLAH_TUGAS ?? c.jumlah_tugas, // jika undefined, dihitung dari daftar tugas
+    members: c.JUMLAH_ANGGOTA ?? c.jumlah_anggota ?? 0,
+    urgent: false,
+  };
+}
+
+function mapTask(t: any) {
+  const deadline = t.DEADLINE ?? t.deadline ?? "";
+  const statusServer = String(t.STATUS_USER ?? t.status ?? "").toLowerCase();
+  return {
+    id: t.TASK_ID ?? t.task_id ?? t.id,
+    kelas_id: t.KELAS_ID ?? t.kelas_id,
+    subject: t.MATA_KULIAH ?? t.mata_kuliah ?? "-",
+    title: t.JUDUL_TUGAS ?? t.judul_tugas ?? "-",
+    deadline: deadline || "-",
+    countdown: hitungCountdown(deadline),
+    dosen: t.DOSEN ?? t.dosen ?? "-",
+    description: t.DESKRIPSI ?? t.deskripsi ?? "",
+    creator: `Dicatat oleh ${t.NAMA_PEMBUAT ?? t.DIBUAT_OLEH ?? t.dibuat_oleh ?? "-"}`,
+    status: statusServer === "selesai" ? "Selesai" : "Belum Dikerjakan",
     color: "#0B4A9E",
-  },
-  {
-    id: "t_mongodb",
-    kelas_id: "k_ti21",
-    subject: "Basis Data Terdistribusi",
-    title: "Perancangan Skema Sharding & Replikasi MongoDB",
-    deadline: "18 Nov 2024, 17:00 WIB",
-    countdown: "3 Hari lagi",
-    dosen: "Ir. Ketut Dharma, M.T.",
-    description:
-      "Simulasi cluster 3 shard dengan mongos router, uji failover saat primary node replica set mati.",
-    creator: "Dicatat oleh PJMK (Dimas Pratama)",
-    status: "Selesai",
-    color: "#9333EA",
-  },
-  {
-    id: "t_routing",
-    kelas_id: "k_ti21",
-    subject: "Jaringan Komputer",
-    title: "Laporan Praktikum Subnetting CIDR & Routing BGP",
-    deadline: "20 Nov 2024, 23:59 WIB",
-    countdown: "5 Hari lagi",
-    dosen: "Gede Arya, S.Kom., M.Cs.",
-    description:
-      "Konfigurasi topologi 4 Autonomous System di Cisco Packet Tracer lengkap dengan screenshot tabel routing.",
-    creator: "Dicatat oleh PJMK (Dimas Pratama)",
-    status: "Belum Dikerjakan",
-    color: "#2563EB",
-  },
-];
+  };
+}
 
 export default function Dashboard() {
   const params = useLocalSearchParams();
 
-  // State Pengguna Aktif
-  const [currentUser, setCurrentUser] = useState({
-    userId: typeof params.userId === "string" ? params.userId : "u_pjmk_dimas",
-    nama: typeof params.nama === "string" ? params.nama : "Dimas Pratama",
-    nim: typeof params.nim === "string" ? params.nim : "2108561042",
-    email: typeof params.email === "string" ? params.email : "pjmk@kampus.ac.id",
-    role: typeof params.role === "string" ? params.role : "PJMK Utama",
-    isNewUser:
-      params.isNewUser === "true" ||
-      (typeof params.email === "string" && params.email.includes("baru")) ||
-      (typeof params.nama === "string" && params.nama.includes("Baru")),
-  });
+  // Pengguna aktif: sepenuhnya berasal dari hasil login server (tanpa akun default)
+  const currentUser = {
+    userId: asString(params.userId),
+    nama: asString(params.nama),
+    nim: asString(params.nim),
+    email: asString(params.email),
+    role: asString(params.role) || "Mahasiswa",
+  };
+  const userInitial = (currentUser.nama || "?").charAt(0).toUpperCase();
 
-  // Tab Utama (3 Tab sesuai Mockup Desain Terbaru): "beranda" | "catatan" | "notifikasi"
+  // Tab Utama: "beranda" | "catatan" | "notifikasi"
   const [activeTab, setActiveTab] = useState<string>("beranda");
 
   // Navigasi Sub-View: null | "daftar-tugas-kelas" | "detail-tugas" | "anggota-kelas" | "buat-kelas" | "gabung-kelas" | "form-tugas"
@@ -197,17 +159,26 @@ export default function Dashboard() {
   const [customIpInput, setCustomIpInput] = useState<string>(CURRENT_LAN_IP);
   const [checkingConn, setCheckingConn] = useState<boolean>(false);
 
-  // Data Kelas & Tugas
-  const [classList, setClassList] = useState<any[]>(
-    currentUser.isNewUser ? [] : DEFAULT_PJMK_CLASSES
-  );
-  const [tasks, setTasks] = useState<any[]>(DEFAULT_TASKS);
+  // Data dari server (awal kosong)
+  const [classList, setClassList] = useState<any[]>([]);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [loadError, setLoadError] = useState<string>("");
 
-  // Muat data saat pengguna berganti
+  // Jika tidak ada sesi login, kembali ke halaman login
   useEffect(() => {
-    loadClassesAndTasks();
+    if (!currentUser.userId) {
+      router.replace("/");
+    }
+  }, []);
+
+  // Muat data dari server saat dashboard dibuka
+  useEffect(() => {
+    if (!currentUser.userId) return;
+    loadData().finally(() => setLoading(false));
     verifyConnection();
-  }, [currentUser.userId, currentUser.isNewUser]);
+  }, [currentUser.userId]);
 
   const verifyConnection = async () => {
     try {
@@ -215,71 +186,56 @@ export default function Dashboard() {
       if (conn.ok) {
         setServerStatus(`Terhubung ke Backend (${conn.url})`);
       } else {
-        setServerStatus(`Mode Offline (Lokal) - ${conn.url}`);
+        setServerStatus(`Gagal terhubung ke Backend (${conn.url})`);
       }
     } catch {
-      setServerStatus("Mode Offline (Lokal)");
+      setServerStatus("Gagal terhubung ke Backend");
     }
   };
 
-  const loadClassesAndTasks = async () => {
-    // Aturan Mahasiswa Baru: Jika akun baru, kelas kosong (0 kelas) sampai bergabung
-    if (currentUser.isNewUser) {
-      setClassList([]);
-      return;
-    }
+  // Ambil kelas & tugas dari server. Mengembalikan daftar tugas terbaru (atau null jika gagal)
+  const loadData = async (): Promise<any[] | null> => {
+    setLoadError("");
+    let freshTasks: any[] | null = null;
 
     try {
       const serverClasses = await fetchClasses(currentUser.userId);
-      if (Array.isArray(serverClasses) && serverClasses.length > 0) {
-        const mapped = serverClasses.map((c: any) => ({
-          kelas_id: c.KELAS_ID || c.kelas_id,
-          kode_kelas: c.KODE_KELAS || c.kode_kelas,
-          code: c.KODE_KELAS || c.kode_kelas,
-          name: c.NAMA_KELAS || c.nama_kelas,
-          nama_kelas: c.NAMA_KELAS || c.nama_kelas,
-          room: "Fakultas MIPA • Universitas Udayana",
-          role: c.PERAN || (c.DIBUAT_OLEH === currentUser.userId ? "PJMK (Admin Kelas)" : "Mahasiswa"),
-          isPjmk: c.PERAN?.includes("PJMK") || c.DIBUAT_OLEH === currentUser.userId,
-          matkulCount: 3,
-          activeTasks: c.JUMLAH_TUGAS || 3,
-          members: c.JUMLAH_ANGGOTA || 48,
-          urgent: false,
-        }));
-        setClassList(mapped);
-      } else {
-        // Gunakan default PJMK jika backend kosong
-        setClassList(DEFAULT_PJMK_CLASSES);
-      }
-    } catch (e) {
-      // Fallback offline
-      setClassList(DEFAULT_PJMK_CLASSES);
+      const list = Array.isArray(serverClasses) ? serverClasses : [];
+      setClassList(list.map((c: any) => mapClass(c, currentUser.userId)));
+    } catch (e: any) {
+      setLoadError(e?.message || "Gagal memuat daftar kelas dari server.");
     }
 
     try {
       const serverTasks = await fetchTasks(currentUser.userId);
-      if (Array.isArray(serverTasks) && serverTasks.length > 0) {
-        const formatted = serverTasks.map((t: any) => ({
-          id: t.TASK_ID || t.id,
-          kelas_id: t.KELAS_ID || t.kelas_id,
-          subject: t.MATA_KULIAH || t.mata_kuliah || "Pemrograman Web Lanjut",
-          title: t.JUDUL_TUGAS || t.judul_tugas,
-          deadline: t.DEADLINE || "15 Nov 2024, 23:59 WIB",
-          countdown: "1 Hari 4 Jam",
-          dosen: "Dr. Aris Munandar, M.Kom",
-          description: t.DESKRIPSI || t.deskripsi || "Tugas perkuliahan semester aktif.",
-          creator: `Dicatat oleh ${t.DIBUAT_OLEH || "PJMK (Dimas Pratama)"}`,
-          status:
-            t.STATUS_USER === "selesai" || t.status === "Selesai"
-              ? "Selesai"
-              : "Belum Dikerjakan",
-          color: "#0B4A9E",
-        }));
-        setTasks(formatted);
-      }
-    } catch (e) {
-      // Fallback offline
+      const list = Array.isArray(serverTasks) ? serverTasks : [];
+      freshTasks = list.map(mapTask);
+      setTasks(freshTasks);
+    } catch (e: any) {
+      setLoadError((prev) => prev || e?.message || "Gagal memuat tugas dari server.");
     }
+
+    return freshTasks;
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadData();
+    await verifyConnection();
+    setRefreshing(false);
+  };
+
+  // Hitung tugas aktif per kelas dari daftar tugas (jika server tidak mengirim jumlahnya)
+  const countActiveTasks = (kelasId: any) =>
+    tasks.filter(
+      (t) => String(t.kelas_id) === String(kelasId) && t.status !== "Selesai"
+    ).length;
+
+  // Sinkronkan tugas yang sedang dibuka dengan data terbaru dari server
+  const refreshSelectedTask = (freshTasks: any[] | null) => {
+    if (!freshTasks || !selectedTask) return;
+    const updated = freshTasks.find((t) => String(t.id) === String(selectedTask.id));
+    if (updated) setSelectedTask(updated);
   };
 
   // Navigasi Buka Kelas
@@ -288,23 +244,22 @@ export default function Dashboard() {
     setSubView("daftar-tugas-kelas");
   };
 
-  // Toggle Status Tugas
+  // Toggle Status Tugas: kirim ke server dulu, ubah tampilan setelah berhasil
   const handleToggleTaskStatus = async (taskId: string | number, newStatus: string) => {
-    setTasks((prev) =>
-      prev.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
-    );
-    if (selectedTask && selectedTask.id === taskId) {
-      setSelectedTask({ ...selectedTask, status: newStatus });
-    }
-
     try {
       await updateTaskStatus(String(taskId), currentUser.userId, newStatus.toLowerCase());
-    } catch (e) {
-      // Tersimpan lokal offline
+      setTasks((prev) =>
+        prev.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
+      );
+      setSelectedTask((prev: any) =>
+        prev && prev.id === taskId ? { ...prev, status: newStatus } : prev
+      );
+    } catch (e: any) {
+      Alert.alert("Gagal Memperbarui Status", e?.message || "Tidak dapat terhubung ke server.");
     }
   };
 
-  // Hapus Tugas (PJMK)
+  // Hapus Tugas (PJMK): hapus di server dulu, baru ubah tampilan
   const handleDeleteTask = async (taskId: string | number) => {
     Alert.alert(
       "Hapus Tugas? 🗑",
@@ -315,113 +270,45 @@ export default function Dashboard() {
           text: "Hapus",
           style: "destructive",
           onPress: async () => {
-            setTasks((prev) => prev.filter((t) => t.id !== taskId));
-            setSubView("daftar-tugas-kelas");
-            setSelectedTask(null);
             try {
               await deleteTask(String(taskId));
-            } catch (e) {
-              // Tersimpan lokal
+              setTasks((prev) => prev.filter((t) => t.id !== taskId));
+              setSubView("daftar-tugas-kelas");
+              setSelectedTask(null);
+              Alert.alert("Berhasil", "Tugas telah berhasil dihapus.");
+            } catch (e: any) {
+              Alert.alert("Gagal Menghapus", e?.message || "Tidak dapat terhubung ke server.");
             }
-            Alert.alert("Berhasil", "Tugas telah berhasil dihapus.");
           },
         },
       ]
     );
   };
 
-  // Callback Simpan Tugas Baru / Ubah Tugas
-  const handleTaskSaved = (savedTask: any) => {
-    const exists = tasks.find((t) => t.id === savedTask.id);
-    if (exists) {
-      setTasks(tasks.map((t) => (t.id === savedTask.id ? { ...t, ...savedTask } : t)));
-      if (selectedTask?.id === savedTask.id) {
-        setSelectedTask({ ...selectedTask, ...savedTask });
-      }
-    } else {
-      setTasks([savedTask, ...tasks]);
-    }
+  // Callback Simpan Tugas Baru / Ubah Tugas: ambil ulang data dari server
+  const handleTaskSaved = async (_savedTask: any) => {
+    const fresh = await loadData();
+    refreshSelectedTask(fresh);
     setSubView("daftar-tugas-kelas");
     setEditingTask(null);
   };
 
   // Callback Deadline Diperbarui
-  const handleDeadlineUpdated = (updatedTask: any) => {
-    setTasks(tasks.map((t) => (t.id === updatedTask.id ? { ...t, ...updatedTask } : t)));
-    setSelectedTask({ ...selectedTask, ...updatedTask });
+  const handleDeadlineUpdated = async (_updatedTask: any) => {
+    const fresh = await loadData();
+    refreshSelectedTask(fresh);
     setUbahDeadlineVisible(false);
   };
 
   // Callback Kelas Baru Dibuat
-  const handleClassCreated = (newCls: any) => {
-    const formatted = {
-      kelas_id: newCls.kelas_id || "k_" + Date.now(),
-      kode_kelas: newCls.kode_kelas,
-      code: newCls.kode_kelas,
-      name: newCls.nama_kelas,
-      nama_kelas: newCls.nama_kelas,
-      room: "Fakultas MIPA • Universitas Udayana",
-      role: "PJMK (Admin Kelas)",
-      isPjmk: true,
-      matkulCount: 1,
-      activeTasks: 0,
-      members: 1,
-      urgent: false,
-    };
-    setClassList([formatted, ...classList]);
-    setCurrentUser((prev) => ({ ...prev, isNewUser: false }));
+  const handleClassCreated = async (_newCls: any) => {
+    await loadData();
   };
 
   // Callback Berhasil Gabung Kelas
-  const handleClassJoined = (joinedClass: any) => {
-    const formatted = {
-      kelas_id: joinedClass.KELAS_ID || joinedClass.kelas_id || "k_" + Date.now(),
-      kode_kelas: joinedClass.KODE_KELAS || joinedClass.kode_kelas,
-      code: joinedClass.KODE_KELAS || joinedClass.kode_kelas,
-      name: joinedClass.NAMA_KELAS || joinedClass.nama_kelas || joinedClass.name,
-      nama_kelas: joinedClass.NAMA_KELAS || joinedClass.nama_kelas || joinedClass.name,
-      room: "Fakultas MIPA • Universitas Udayana",
-      role: "Mahasiswa",
-      isPjmk: false,
-      matkulCount: 3,
-      activeTasks: 3,
-      members: 48,
-      urgent: false,
-    };
-
-    // Hindari duplikasi jika sudah ada
-    if (!classList.some((c) => c.code === formatted.code)) {
-      setClassList([formatted, ...classList]);
-    }
-    setCurrentUser((prev) => ({ ...prev, isNewUser: false }));
+  const handleClassJoined = async (_joinedClass: any) => {
+    await loadData();
     setSubView(null);
-  };
-
-  // Switch Akun Cepat (Untuk pengujian akun PJMK vs Mahasiswa Baru)
-  const switchAccount = (type: "pjmk" | "mhs_baru") => {
-    if (type === "pjmk") {
-      setCurrentUser({
-        userId: "u_pjmk_dimas",
-        nama: "Dimas Pratama",
-        nim: "2108561042",
-        email: "pjmk@kampus.ac.id",
-        role: "PJMK Utama",
-        isNewUser: false,
-      });
-      setClassList(DEFAULT_PJMK_CLASSES);
-    } else {
-      setCurrentUser({
-        userId: "u_mhs_baru_" + Date.now(),
-        nama: "Mahasiswa Baru",
-        nim: "2108569999",
-        email: "mhsbaru@kampus.ac.id",
-        role: "Mahasiswa",
-        isNewUser: true,
-      });
-      setClassList([]); // Mahasiswa baru belum masuk kelas manapun!
-    }
-    setSubView(null);
-    setAccountModalVisible(false);
   };
 
   // Simpan IP Kustom untuk koneksi Expo Go antar-perangkat
@@ -434,27 +321,30 @@ export default function Dashboard() {
       const conn = await checkServerConnection();
       if (conn.ok) {
         Alert.alert("Koneksi Berhasil! ✅", `Terhubung ke backend di ${newUrl}`);
-        setServerStatus(`Terhubung ke ${newUrl}`);
+        setServerStatus(`Terhubung ke Backend (${newUrl})`);
+        await loadData();
       } else {
         Alert.alert("Gagal Terhubung ⚠️", `Tidak dapat menghubungi ${newUrl}. Periksa firewall dan port.`);
+        setServerStatus(`Gagal terhubung ke Backend (${newUrl})`);
       }
     } finally {
       setCheckingConn(false);
     }
   };
 
+  // Tanpa sesi login, jangan tampilkan apa pun (pengguna dialihkan ke login)
+  if (!currentUser.userId) {
+    return null;
+  }
+
   // =========================================================================
   // SUB-VIEWS RENDERING
   // =========================================================================
 
-  // 1. Sub-View: Daftar Tugas Kelas (Mockup Gambar 3 Kanan)
+  // 1. Sub-View: Daftar Tugas Kelas
   if (subView === "daftar-tugas-kelas" && selectedClass) {
     const classTasks = tasks.filter(
-      (t) =>
-        !t.kelas_id ||
-        t.kelas_id === selectedClass.kelas_id ||
-        t.subject === selectedClass.name ||
-        selectedClass.code === "TI21-A89K"
+      (t) => String(t.kelas_id) === String(selectedClass.kelas_id)
     );
 
     return (
@@ -481,7 +371,7 @@ export default function Dashboard() {
     );
   }
 
-  // 2. Sub-View: Detail Tugas (Mockup Gambar 3 Kiri)
+  // 2. Sub-View: Detail Tugas
   if (subView === "detail-tugas" && selectedTask) {
     return (
       <View style={{ flex: 1 }}>
@@ -512,7 +402,7 @@ export default function Dashboard() {
     );
   }
 
-  // 3. Sub-View: Anggota Kelas (Mockup Gambar 5 Kiri)
+  // 3. Sub-View: Anggota Kelas
   if (subView === "anggota-kelas" && selectedClass) {
     return (
       <AnggotaKelasComp
@@ -523,7 +413,7 @@ export default function Dashboard() {
     );
   }
 
-  // 4. Sub-View: Buat Kelas Modal (Mockup Gambar 2 Kiri)
+  // 4. Sub-View: Buat Kelas
   if (subView === "buat-kelas") {
     return (
       <BuatKelasComp
@@ -534,7 +424,7 @@ export default function Dashboard() {
     );
   }
 
-  // 5. Sub-View: Gabung Kelas Modal (Mockup Gambar 2 Kanan)
+  // 5. Sub-View: Gabung Kelas
   if (subView === "gabung-kelas") {
     return (
       <GabungKelasComp
@@ -545,7 +435,7 @@ export default function Dashboard() {
     );
   }
 
-  // 6. Sub-View: Form Tambah / Ubah Tugas (Mockup Gambar 4 Kiri)
+  // 6. Sub-View: Form Tambah / Ubah Tugas
   if (subView === "form-tugas") {
     return (
       <FormTugasComp
@@ -579,27 +469,16 @@ export default function Dashboard() {
           </Text>
         </View>
 
-        {/* Profil Avatar (Bisa Ditekan untuk Switch Akun & Cek Server) */}
+        {/* Profil Avatar (untuk melihat profil, cek server & logout) */}
         <TouchableOpacity
           style={styles.avatarBtn}
           onPress={() => setAccountModalVisible(true)}
           activeOpacity={0.8}
         >
           <View style={styles.avatarInner}>
-            <Text style={styles.avatarInitials}>
-              {currentUser.nama.charAt(0).toUpperCase()}
-            </Text>
+            <Text style={styles.avatarInitials}>{userInitial}</Text>
           </View>
         </TouchableOpacity>
-      </View>
-
-      {/* BANNER STATUS OFFLINE / SINKRONISASI */}
-      <View style={styles.offlineBanner}>
-        <Text style={styles.bannerIcon}>🔔</Text>
-        <Text style={styles.bannerText}>
-          Mode Offline • Perubahan akan disinkronkan saat online
-        </Text>
-        <Text style={styles.bannerIcon}>🔔</Text>
       </View>
 
       {/* ==================== TAB 1: BERANDA - DAFTAR KELAS ==================== */}
@@ -608,27 +487,25 @@ export default function Dashboard() {
           style={styles.mainScroll}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
         >
           {/* KARTU SAPAAN MAHASISWA */}
           <View style={styles.greetingCard}>
             <View style={styles.greetingTextContainer}>
               <Text style={styles.greetingName}>Halo, {currentUser.nama}! 👋</Text>
-              <Text style={styles.greetingNim}>
-                🪪 NIM: {currentUser.nim} • Smt 6
-              </Text>
+              <Text style={styles.greetingNim}>🪪 NIM: {currentUser.nim}</Text>
             </View>
             <View style={styles.greetingAvatarWrap}>
               <View style={styles.greetingAvatar}>
-                <Text style={styles.greetingAvatarText}>
-                  {currentUser.nama.charAt(0).toUpperCase()}
-                </Text>
+                <Text style={styles.greetingAvatarText}>{userInitial}</Text>
               </View>
             </View>
           </View>
 
           {/* DUA KARTU AKSI CEPAT (BUAT KELAS & GABUNG KELAS) */}
           <View style={styles.actionCardsRow}>
-            {/* Tombol Buat Kelas (Khusus PJMK / Admin) */}
             <TouchableOpacity
               style={styles.blueActionCard}
               onPress={() => setSubView("buat-kelas")}
@@ -641,7 +518,6 @@ export default function Dashboard() {
               <Text style={styles.blueCardSub}>Khusus PJMK / Admin</Text>
             </TouchableOpacity>
 
-            {/* Tombol Gabung Kelas (Pakai Kode Undangan) */}
             <TouchableOpacity
               style={styles.lightActionCard}
               onPress={() => setSubView("gabung-kelas")}
@@ -675,17 +551,30 @@ export default function Dashboard() {
             </TouchableOpacity>
           </View>
 
-          {/* ATURAN MAHASISWA BARU: KELAS KOSONG JIKA BELUM GABUNG */}
-          {classList.length === 0 ? (
+          {/* STATUS: MEMUAT / ERROR / KOSONG / DAFTAR KELAS */}
+          {loading ? (
+            <View style={styles.loadingWrap}>
+              <ActivityIndicator size="large" color={COLORS.primaryBlue} />
+              <Text style={styles.loadingText}>Memuat data dari server...</Text>
+            </View>
+          ) : loadError && classList.length === 0 ? (
+            <View style={styles.errorCard}>
+              <Text style={styles.errorTitle}>Gagal Memuat Data</Text>
+              <Text style={styles.errorDesc}>{loadError}</Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={onRefresh}>
+                <Text style={styles.retryBtnText}>🔄 Coba Lagi</Text>
+              </TouchableOpacity>
+            </View>
+          ) : classList.length === 0 ? (
             <View style={styles.emptyClassCard}>
               <Text style={styles.emptyClassIcon}>🎓</Text>
               <Text style={styles.emptyClassTitle}>
                 Belum Terdaftar di Kelas Manapun
               </Text>
               <Text style={styles.emptyClassDesc}>
-                Anda belum bergabung ke kelas perkuliahan. Minta 6-8 digit Kode
-                Kelas dari PJMK Anda lalu klik tombol "Gabung Kelas" di atas, atau
-                buat kelas baru jika Anda adalah PJMK.
+                Anda belum bergabung ke kelas perkuliahan. Minta Kode Kelas dari
+                PJMK Anda lalu klik tombol "Gabung Kelas" di atas, atau buat
+                kelas baru jika Anda adalah PJMK.
               </Text>
               <TouchableOpacity
                 style={styles.joinNowBtn}
@@ -697,15 +586,15 @@ export default function Dashboard() {
               </TouchableOpacity>
             </View>
           ) : (
-            /* DAFTAR KARTU KELAS SESUAI MOCKUP FIGMA GAMBAR 1 KANAN */
             classList.map((item, index) => {
-              const isPjmkItem =
-                item.role?.includes("PJMK") || item.isPjmk;
+              const isPjmkItem = item.role?.includes("PJMK") || item.isPjmk;
               const isPendamping = item.role?.includes("Pendamping");
+              const activeCount =
+                item.activeTasks ?? countActiveTasks(item.kelas_id);
 
               return (
                 <TouchableOpacity
-                  key={item.code || item.kode_kelas || index}
+                  key={item.kelas_id || item.code || index}
                   style={styles.classCard}
                   onPress={() => handleOpenClass(item)}
                   activeOpacity={0.9}
@@ -753,13 +642,17 @@ export default function Dashboard() {
                     <Text style={styles.moreIcon}>⋮</Text>
                   </View>
 
-                  {/* NAMA KELAS & DOSEN / RUANGAN */}
+                  {/* NAMA KELAS & RUANGAN */}
                   <Text style={styles.classCardTitle}>
                     {item.name || item.nama_kelas}
                   </Text>
-                  <Text style={styles.classCardSubtitle}>{item.room}</Text>
+                  {item.room ? (
+                    <Text style={styles.classCardSubtitle}>{item.room}</Text>
+                  ) : (
+                    <View style={{ height: 14 }} />
+                  )}
 
-                  {/* FOOTER KELAS: MATKUL, TUGAS AKTIF, BUKA */}
+                  {/* FOOTER KELAS: MATKUL, TUGAS AKTIF, ANGGOTA, BUKA */}
                   <View style={styles.classCardFooter}>
                     <View style={styles.footerInfoRow}>
                       {item.matkulCount ? (
@@ -768,16 +661,8 @@ export default function Dashboard() {
                         </Text>
                       ) : null}
 
-                      <Text
-                        style={[
-                          styles.footerItemText,
-                          item.urgent && styles.urgentFooterText,
-                        ]}
-                      >
-                        ⏰{" "}
-                        {item.footerDeadline
-                          ? item.footerDeadline
-                          : `${item.activeTasks || 0} Tugas Aktif`}
+                      <Text style={styles.footerItemText}>
+                        ⏰ {activeCount} Tugas Aktif
                       </Text>
 
                       {item.members ? (
@@ -793,18 +678,6 @@ export default function Dashboard() {
               );
             })
           )}
-
-          {/* KARTU SINKRONISASI OTOMATIS */}
-          <View style={styles.syncCard}>
-            <Text style={styles.syncCardIcon}>🔄</Text>
-            <View style={styles.syncTextWrap}>
-              <Text style={styles.syncCardTitle}>Sinkronisasi Otomatis</Text>
-              <Text style={styles.syncCardDesc}>
-                Data lokal Anda aman. Begitu jaringan pulih, tugas & progres
-                tersimpan ke server.
-              </Text>
-            </View>
-          </View>
 
           <View style={{ height: 40 }} />
         </ScrollView>
@@ -835,7 +708,7 @@ export default function Dashboard() {
         </View>
       )}
 
-      {/* ==================== 3 BOTTOM TABS SESUAI FIGMA ==================== */}
+      {/* ==================== 3 BOTTOM TABS ==================== */}
       <View style={styles.bottomTabBar}>
         {/* Tab 1: Kelas / Tugas */}
         <TouchableOpacity
@@ -914,7 +787,7 @@ export default function Dashboard() {
       </View>
 
       {/* ========================================================================= */}
-      {/* MODAL PENGATURAN AKUN, SWITCH PROFILE & KONEKSI BACKEND MULTI-DEVICE    */}
+      {/* MODAL PROFIL, KONEKSI BACKEND & LOGOUT                                    */}
       {/* ========================================================================= */}
       <Modal
         visible={accountModalVisible}
@@ -936,9 +809,7 @@ export default function Dashboard() {
             {/* Info Akun Aktif */}
             <View style={styles.userProfileCard}>
               <View style={styles.profileAvatarLarge}>
-                <Text style={styles.profileAvatarText}>
-                  {currentUser.nama.charAt(0).toUpperCase()}
-                </Text>
+                <Text style={styles.profileAvatarText}>{userInitial}</Text>
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.profileNameLarge}>{currentUser.nama}</Text>
@@ -953,57 +824,8 @@ export default function Dashboard() {
               </View>
             </View>
 
-            {/* SWITCH AKUN CEPAT SESUAI PERMINTAAN PENGUJIAN SRS */}
-            <Text style={styles.sheetSectionTitle}>
-              Beralih Akun (Uji Fitur & Aturan SRS):
-            </Text>
-
-            <TouchableOpacity
-              style={[
-                styles.accountOptionCard,
-                !currentUser.isNewUser && styles.accountOptionActive,
-              ]}
-              onPress={() => switchAccount("pjmk")}
-            >
-              <Text style={styles.accountOptionEmoji}>👑</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.accountOptionTitle}>
-                  Dimas Pratama (PJMK)
-                </Text>
-                <Text style={styles.accountOptionSub}>
-                  Memiliki 3 kelas terdaftar & hak akses penuh mengelola tugas.
-                </Text>
-              </View>
-              {!currentUser.isNewUser ? (
-                <Text style={styles.checkIcon}>✓</Text>
-              ) : null}
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.accountOptionCard,
-                currentUser.isNewUser && styles.accountOptionActive,
-              ]}
-              onPress={() => switchAccount("mhs_baru")}
-            >
-              <Text style={styles.accountOptionEmoji}>🎓</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.accountOptionTitle}>
-                  Mahasiswa Baru (0 Kelas)
-                </Text>
-                <Text style={styles.accountOptionSub}>
-                  Belum masuk kelas manapun sampai memasukkan kode undangan.
-                </Text>
-              </View>
-              {currentUser.isNewUser ? (
-                <Text style={styles.checkIcon}>✓</Text>
-              ) : null}
-            </TouchableOpacity>
-
-            {/* KONEKSI MULTI-DEVICE (EXPO GO / WEB / LAN) */}
-            <Text style={styles.sheetSectionTitle}>
-              Koneksi Server Backend (Multi-Device):
-            </Text>
+            {/* KONEKSI SERVER (EXPO GO / WEB / LAN) */}
+            <Text style={styles.sheetSectionTitle}>Koneksi Server Backend:</Text>
             <View style={styles.serverCard}>
               <Text style={styles.serverStatusLabel}>Status Backend:</Text>
               <Text style={styles.serverStatusValue}>{serverStatus}</Text>
@@ -1098,25 +920,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "800",
     color: COLORS.primaryBlue,
-  },
-  offlineBanner: {
-    backgroundColor: "#FDF4E7",
-    paddingVertical: 7,
-    paddingHorizontal: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F8DFB7",
-  },
-  bannerIcon: {
-    fontSize: 12,
-  },
-  bannerText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#B45309",
   },
   mainScroll: {
     flex: 1,
@@ -1279,6 +1082,50 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#0B4A9E",
   },
+  loadingWrap: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 36,
+    gap: 10,
+  },
+  loadingText: {
+    fontSize: 12,
+    color: COLORS.subText,
+    fontWeight: "600",
+  },
+  errorCard: {
+    backgroundColor: "#FEF2F2",
+    borderRadius: 18,
+    padding: 20,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    marginBottom: 16,
+  },
+  errorTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#B91C1C",
+  },
+  errorDesc: {
+    fontSize: 12,
+    color: "#7F1D1D",
+    textAlign: "center",
+    lineHeight: 18,
+    marginTop: 6,
+    marginBottom: 14,
+  },
+  retryBtn: {
+    backgroundColor: "#0A3F88",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  retryBtnText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "800",
+  },
   emptyClassCard: {
     backgroundColor: COLORS.cardBg,
     borderRadius: 18,
@@ -1432,42 +1279,10 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#475569",
   },
-  urgentFooterText: {
-    color: "#DC2626",
-    fontWeight: "700",
-  },
   bukaLink: {
     fontSize: 12,
     fontWeight: "800",
     color: "#0B4A9E",
-  },
-  syncCard: {
-    backgroundColor: "#EBF3FC",
-    borderRadius: 16,
-    padding: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    marginTop: 6,
-    borderWidth: 1,
-    borderColor: "#D2E4F7",
-  },
-  syncCardIcon: {
-    fontSize: 22,
-  },
-  syncTextWrap: {
-    flex: 1,
-  },
-  syncCardTitle: {
-    fontSize: 13,
-    fontWeight: "800",
-    color: "#0B4A9E",
-  },
-  syncCardDesc: {
-    fontSize: 11,
-    color: "#475569",
-    lineHeight: 16,
-    marginTop: 2,
   },
   bottomTabBar: {
     flexDirection: "row",
@@ -1596,38 +1411,6 @@ const styles = StyleSheet.create({
     color: COLORS.navyText,
     marginBottom: 8,
     marginTop: 6,
-  },
-  accountOptionCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 12,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: "#E2E8F0",
-    marginBottom: 8,
-    gap: 10,
-  },
-  accountOptionActive: {
-    borderColor: "#0B4A9E",
-    backgroundColor: "#F0F7FF",
-  },
-  accountOptionEmoji: {
-    fontSize: 22,
-  },
-  accountOptionTitle: {
-    fontSize: 13,
-    fontWeight: "800",
-    color: COLORS.navyText,
-  },
-  accountOptionSub: {
-    fontSize: 11,
-    color: COLORS.subText,
-    marginTop: 2,
-  },
-  checkIcon: {
-    fontSize: 16,
-    fontWeight: "900",
-    color: "#0B4A9E",
   },
   serverCard: {
     backgroundColor: "#F8FAFC",

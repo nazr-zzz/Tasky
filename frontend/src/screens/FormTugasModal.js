@@ -13,6 +13,14 @@ import {
 } from "react-native";
 import { createTask, updateTask } from "../services/api";
 
+// Pecah teks deadline "16 Nov 2024, 23:59 WIB" menjadi tanggal dan waktu (untuk mode ubah tugas)
+function pecahDeadline(deadline) {
+  const s = String(deadline || "");
+  const idx = s.lastIndexOf(", ");
+  if (!s || s === "-" || idx === -1) return { tanggal: "", waktu: "" };
+  return { tanggal: s.slice(0, idx), waktu: s.slice(idx + 2) };
+}
+
 export default function FormTugasScreen({
   task,
   kelas,
@@ -22,92 +30,68 @@ export default function FormTugasScreen({
 }) {
   const isEditing = Boolean(task?.id);
 
+  const awal = pecahDeadline(task?.deadline);
+
   const [judulTugas, setJudulTugas] = useState(
-    task?.title || "Praktikum 4: Implementasi ORM Prisma"
+    task?.title && task.title !== "-" ? task.title : ""
   );
   const [selectedMatkul, setSelectedMatkul] = useState(
-    task?.subject || "Pemrograman Web Lanjut"
+    task?.subject && task.subject !== "-" ? task.subject : ""
   );
-  const [tanggal, setTanggal] = useState("16 Nov 2024");
-  const [waktu, setWaktu] = useState("23:59 WIB");
-  const [deskripsi, setDeskripsi] = useState(
-    task?.description ||
-      "Buat skema relasi database migration memakai Prisma ORM, push repository ke GitHub kelas sebelum jam 23:59 WIB."
-  );
+  const [tanggal, setTanggal] = useState(awal.tanggal);
+  const [waktu, setWaktu] = useState(awal.waktu);
+  const [deskripsi, setDeskripsi] = useState(task?.description || "");
   const [loading, setLoading] = useState(false);
-
-  const matkulOptions = [
-    "Pemrograman Web Lanjut",
-    "Basis Data Terdistribusi",
-    "Jaringan Komputer",
-  ];
 
   const handleSimpanTugas = async () => {
     if (!judulTugas.trim() || !selectedMatkul.trim()) {
       Alert.alert("Perhatian", "Judul tugas dan mata kuliah wajib diisi.");
       return;
     }
+    if (!tanggal.trim() || !waktu.trim()) {
+      Alert.alert("Perhatian", "Tanggal dan waktu deadline wajib diisi.");
+      return;
+    }
+    if (!kelas?.kelas_id) {
+      Alert.alert("Kelas Tidak Ditemukan", "Pilih kelas terlebih dahulu sebelum menambah tugas.");
+      return;
+    }
+    if (!currentUser?.userId) {
+      Alert.alert("Sesi Berakhir", "Silakan login ulang.");
+      return;
+    }
 
     setLoading(true);
-    const deadlineStr = `${tanggal}, ${waktu}`;
+    const deadlineStr = `${tanggal.trim()}, ${waktu.trim()}`;
 
     try {
       const payload = {
         task_id: isEditing ? String(task.id) : undefined,
-        kelas_id: kelas?.kelas_id || "k_ti21",
-        dibuat_oleh: currentUser?.userId || "u_pjmk_dimas",
+        kelas_id: kelas.kelas_id,
+        dibuat_oleh: currentUser.userId,
         judul_tugas: judulTugas.trim(),
-        mata_kuliah: selectedMatkul,
+        mata_kuliah: selectedMatkul.trim(),
         deadline: deadlineStr,
         deskripsi: deskripsi.trim(),
       };
 
+      let res;
       if (isEditing) {
-        await updateTask(task.id, payload);
+        res = await updateTask(task.id, payload);
       } else {
-        await createTask(payload);
+        res = await createTask(payload);
       }
-
-      const savedObj = {
-        id: task?.id || "t_" + Date.now(),
-        subject: selectedMatkul,
-        title: judulTugas.trim(),
-        deadline: deadlineStr,
-        countdown: "H-1",
-        creator: `Dicatat oleh PJMK (${currentUser?.nama || "Dimas Pratama"})`,
-        attachment: "Unggah di Classroom",
-        description: deskripsi.trim(),
-        status: "Belum Dikerjakan",
-      };
 
       Alert.alert(
         "Tugas Berhasil Disimpan! 🎉",
-        "Tugas baru telah diterbitkan dan disinkronkan ke seluruh mahasiswa anggota kelas."
+        "Tugas telah tersimpan di server dan dapat dilihat oleh seluruh anggota kelas."
       );
 
-      if (onTaskSaved) onTaskSaved(savedObj);
+      // Dashboard mengambil ulang data terbaru dari server
+      if (onTaskSaved) await onTaskSaved(res);
       if (onBack) onBack();
     } catch (e) {
-      // Fallback offline
-      const fallbackObj = {
-        id: task?.id || "t_" + Date.now(),
-        subject: selectedMatkul,
-        title: judulTugas.trim(),
-        deadline: deadlineStr,
-        countdown: "H-1",
-        creator: `Dicatat oleh PJMK (${currentUser?.nama || "Dimas Pratama"})`,
-        attachment: "Unggah di Classroom",
-        description: deskripsi.trim(),
-        status: "Belum Dikerjakan",
-      };
-
-      Alert.alert(
-        "Tersimpan Secara Lokal 💾",
-        "Tugas telah tersimpan di memori perangkat lokal dan siap disinkronkan saat online."
-      );
-
-      if (onTaskSaved) onTaskSaved(fallbackObj);
-      if (onBack) onBack();
+      Alert.alert("Gagal Menyimpan Tugas", e?.message || "Tidak dapat terhubung ke server.");
     } finally {
       setLoading(false);
     }
@@ -127,7 +111,7 @@ export default function FormTugasScreen({
         </Text>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>
-            {(currentUser?.nama || "D").charAt(0).toUpperCase()}
+            {(currentUser?.nama || "?").charAt(0).toUpperCase()}
           </Text>
         </View>
       </View>
@@ -171,32 +155,19 @@ export default function FormTugasScreen({
 
         {/* STEP 2: PILIH MATA KULIAH */}
         <View style={styles.stepHeaderRow}>
-          <Text style={styles.fieldLabel}>Pilih Mata Kuliah *</Text>
+          <Text style={styles.fieldLabel}>Mata Kuliah *</Text>
           <View style={styles.stepBadge}>
             <Text style={styles.stepBadgeText}>Langkah 2</Text>
           </View>
         </View>
-        <View style={styles.matkulRow}>
-          {matkulOptions.map((opt) => (
-            <TouchableOpacity
-              key={opt}
-              style={[
-                styles.matkulChip,
-                selectedMatkul === opt && styles.matkulChipActive,
-              ]}
-              onPress={() => setSelectedMatkul(opt)}
-            >
-              <Text
-                style={[
-                  styles.matkulChipText,
-                  selectedMatkul === opt && styles.matkulChipTextActive,
-                ]}
-              >
-                {selectedMatkul === opt ? "✔ " : ""}
-                {opt}
-              </Text>
-            </TouchableOpacity>
-          ))}
+        <View style={styles.inputBox}>
+          <TextInput
+            style={styles.textInput}
+            placeholder="Contoh: Basis Data"
+            placeholderTextColor="#94A3B8"
+            value={selectedMatkul}
+            onChangeText={setSelectedMatkul}
+          />
         </View>
 
         {/* STEP 3: TENGGAT WAKTU (DEADLINE) */}
@@ -213,6 +184,8 @@ export default function FormTugasScreen({
               <Text style={styles.inputIcon}>📅</Text>
               <TextInput
                 style={styles.textInput}
+                placeholder="Contoh: 16 Nov 2024"
+                placeholderTextColor="#94A3B8"
                 value={tanggal}
                 onChangeText={setTanggal}
               />
@@ -225,15 +198,14 @@ export default function FormTugasScreen({
               <Text style={styles.inputIcon}>🕒</Text>
               <TextInput
                 style={styles.textInput}
+                placeholder="Contoh: 23:59 WIB"
+                placeholderTextColor="#94A3B8"
                 value={waktu}
                 onChangeText={setWaktu}
               />
             </View>
           </View>
         </View>
-        <Text style={styles.urgentHint}>
-          🔴 Prioritas tinggi: Diatur sebagai tugas mendesak untuk kelas
-        </Text>
 
         {/* STEP 4: DESKRIPSI & PETUNJUK */}
         <View style={styles.stepHeaderRow}>
@@ -259,7 +231,7 @@ export default function FormTugasScreen({
             <View>
               <Text style={styles.storageTitle}>Penyimpanan Terpadu</Text>
               <Text style={styles.storageSubtitle}>
-                Tersimpan di perangkat lokal jika koneksi terputus
+                Tersimpan di server dan terlihat oleh seluruh anggota kelas
               </Text>
             </View>
           </View>
@@ -468,12 +440,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginBottom: 4,
   },
-  urgentHint: {
-    fontSize: 11,
-    color: "#DC2626",
-    fontWeight: "600",
-    marginBottom: 16,
-  },
   textAreaBox: {
     height: 90,
     paddingVertical: 8,
@@ -555,4 +521,3 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 });
-

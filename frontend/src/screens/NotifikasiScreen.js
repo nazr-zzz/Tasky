@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -6,72 +6,164 @@ import {
   TouchableOpacity,
   StyleSheet,
   Alert,
+  ActivityIndicator,
+  RefreshControl,
 } from "react-native";
+import {
+  fetchNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+} from "../services/api";
 
-export default function NotifikasiScreen({
-  currentUser,
-  onOpenTask,
-}) {
-  const [notifications, setNotifications] = useState([
-    {
-      id: "notif_1",
-      type: "deadline_h1",
-      titleLabel: "PENGINGAT H-1 DEADLINE",
-      time: "15 Menit yang lalu",
-      isUnread: true,
-      message:
-        "Tenggat waktu tugas 'Implementasi RESTful API & Autentikasi JWT' berakhir besok pukul 23:59 WIB. Pastikan progres tugas Anda sudah selesai!",
-      matkulTag: "Pemrograman Web Lanjut",
-      subTag: "Implementasi RESTful API & Aut",
-      icon: "⏰",
-      iconBg: "#FEE2E2",
-      iconColor: "#DC2626",
-    },
-    {
-      id: "notif_2",
-      type: "deadline_changed",
-      titleLabel: "PERUBAHAN DEADLINE DARI PJMK",
-      time: "2 Jam yang lalu",
-      isUnread: false,
-      message:
-        "PJMK Dimas Pratama telah memperbarui batas waktu pengumpulan tugas 'Perancangan Skema Sharding & Replikasi MongoDB' menjadi 20 Nov 2024, 23:59 WIB.",
-      reason: "Dispensasi penyesuaian materi koneksi ORM.",
-      icon: "📅",
-      iconBg: "#EFF6FF",
-      iconColor: "#1D4ED8",
-    },
-    {
-      id: "notif_3",
-      type: "deadline_past",
-      titleLabel: "PENGINGAT H-1 DEADLINE",
-      time: "Kemarin",
-      isUnread: false,
-      message:
-        "Tugas 'Kuis Algoritma Pemrograman' akan ditutup malam ini pukul 23:59 WIB.",
-      sentStatus: "✔ Telah Terkirim",
-      icon: "🔔",
-      iconBg: "#F1F5F9",
-      iconColor: "#64748B",
-    },
-  ]);
+// =========================================================================
+// HELPER: pemetaan data notifikasi dari server
+// =========================================================================
 
-  const handleMarkAllRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, isUnread: false })));
-    Alert.alert("Sukses", "Semua notifikasi telah ditandai telah dibaca.");
+const BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
+// Ubah tanggal menjadi teks relatif ("5 menit yang lalu") atau tanggal singkat
+function waktuRelatif(nilai) {
+  if (!nilai) return "";
+  const d = new Date(nilai);
+  if (isNaN(d.getTime())) return String(nilai);
+  const detik = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (detik < 60) return "Baru saja";
+  if (detik < 3600) return `${Math.floor(detik / 60)} menit yang lalu`;
+  if (detik < 86400) return `${Math.floor(detik / 3600)} jam yang lalu`;
+  if (detik < 172800) return "Kemarin";
+  return `${d.getDate()} ${BULAN[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+// Kelompokkan tipe notifikasi dari server menjadi 3 jenis tampilan
+function normalisasiTipe(raw) {
+  const s = String(raw || "").toLowerCase();
+  if (s.includes("ubah") || s.includes("change") || s.includes("perubahan")) {
+    return "deadline_changed";
+  }
+  if (
+    s.includes("h-1") ||
+    s.includes("h1") ||
+    s.includes("remind") ||
+    s.includes("ingat") ||
+    s.includes("deadline")
+  ) {
+    return "deadline_h1";
+  }
+  return "info";
+}
+
+const TIPE_META = {
+  deadline_h1: { label: "PENGINGAT DEADLINE", icon: "⏰", bg: "#FEE2E2" },
+  deadline_changed: { label: "PERUBAHAN DEADLINE DARI PJMK", icon: "📅", bg: "#EFF6FF" },
+  info: { label: "INFORMASI", icon: "🔔", bg: "#F1F5F9" },
+};
+
+const adalahBenar = (v) =>
+  v === 1 || v === true || v === "1" || v === "Y" || v === "y" || v === "true";
+
+function mapNotif(n) {
+  const tipe = normalisasiTipe(n.TIPE ?? n.tipe ?? n.JENIS ?? n.jenis ?? n.type);
+  const meta = TIPE_META[tipe];
+
+  // Penanda sudah dibaca: coba beberapa kemungkinan nama field
+  const flag =
+    n.DIBACA ?? n.dibaca ?? n.IS_READ ?? n.is_read ?? n.SUDAH_DIBACA ?? n.sudah_dibaca;
+  const isUnread = flag === undefined ? false : !adalahBenar(flag);
+
+  const judul = n.JUDUL ?? n.judul ?? n.TITLE ?? n.title;
+
+  return {
+    id: n.NOTIF_ID ?? n.notif_id ?? n.id,
+    type: tipe,
+    titleLabel: String(judul || meta.label).toUpperCase(),
+    time: waktuRelatif(n.CREATED_AT ?? n.created_at ?? n.WAKTU ?? n.waktu ?? n.TANGGAL),
+    isUnread,
+    message: n.PESAN ?? n.pesan ?? n.ISI ?? n.isi ?? n.message ?? "",
+    taskId: n.TASK_ID ?? n.task_id ?? n.TUGAS_ID ?? n.tugas_id,
+    matkulTag: n.MATA_KULIAH ?? n.mata_kuliah,
+    subTag: n.JUDUL_TUGAS ?? n.judul_tugas,
+    reason: n.ALASAN ?? n.alasan,
+    icon: meta.icon,
+    iconBg: meta.bg,
+  };
+}
+
+export default function NotifikasiScreen({ currentUser, onOpenTask }) {
+  const userId = currentUser?.userId;
+
+  const [notifications, setNotifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const [markingAll, setMarkingAll] = useState(false);
+
+  const loadNotifications = async () => {
+    setError("");
+    try {
+      const data = await fetchNotifications(userId);
+      const list = Array.isArray(data) ? data : [];
+      setNotifications(list.map(mapNotif));
+    } catch (e) {
+      setError(e?.message || "Gagal memuat notifikasi.");
+    }
+  };
+
+  useEffect(() => {
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
+    loadNotifications().finally(() => setLoading(false));
+  }, [userId]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadNotifications();
+    setRefreshing(false);
+  };
+
+  // Tandai semua dibaca: kirim ke server dulu, ubah tampilan hanya jika berhasil
+  const handleMarkAllRead = async () => {
+    if (markingAll) return;
+    setMarkingAll(true);
+    try {
+      const ok = await markAllNotificationsRead(userId);
+      if (!ok) throw new Error("Server menolak permintaan.");
+      setNotifications((prev) => prev.map((n) => ({ ...n, isUnread: false })));
+      Alert.alert("Sukses", "Semua notifikasi telah ditandai telah dibaca.");
+    } catch (e) {
+      Alert.alert("Gagal", e?.message || "Tidak dapat terhubung ke server.");
+    } finally {
+      setMarkingAll(false);
+    }
+  };
+
+  // Buka tugas terkait; tandai notifikasi dibaca di server bila masih baru
+  const handleOpenTask = async (item) => {
+    if (item.isUnread) {
+      try {
+        const ok = await markNotificationRead(item.id);
+        if (ok) {
+          setNotifications((prev) =>
+            prev.map((n) => (n.id === item.id ? { ...n, isUnread: false } : n))
+          );
+        }
+      } catch (e) {
+        // Gagal menandai dibaca tidak menghalangi membuka tugas
+      }
+    }
+    if (onOpenTask) onOpenTask(item);
   };
 
   const unreadCount = notifications.filter((n) => n.isUnread).length;
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      {/* STRIP MODE OFFLINE */}
-      <View style={styles.offlineStrip}>
-        <Text style={styles.offlineStripText}>
-          ⚠️ Mode Offline • Perubahan akan disinkronkan saat online 🔸
-        </Text>
-      </View>
-
-      {/* HEADER SECTION: NOTIFIKASI [1 BARU] & TANDAI DIBACA */}
+    <ScrollView
+      style={styles.container}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+    >
+      {/* HEADER SECTION: NOTIFIKASI [N BARU] & TANDAI DIBACA */}
       <View style={styles.topHeaderRow}>
         <View style={styles.titleWithCount}>
           <Text style={styles.mainTitle}>Notifikasi</Text>
@@ -82,118 +174,114 @@ export default function NotifikasiScreen({
           )}
         </View>
 
-        <TouchableOpacity onPress={handleMarkAllRead}>
-          <Text style={styles.markReadBtn}>✓ Tandai Semua Dibaca</Text>
-        </TouchableOpacity>
+        {unreadCount > 0 && (
+          <TouchableOpacity onPress={handleMarkAllRead} disabled={markingAll}>
+            <Text style={[styles.markReadBtn, markingAll && { opacity: 0.5 }]}>
+              ✓ Tandai Semua Dibaca
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
 
-      {/* BANNER ALARM LOKAL MANDIRI */}
-      <View style={styles.alarmBanner}>
-        <Text style={styles.alarmIcon}>🛡️</Text>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.alarmTitle}>Alarm Lokal Mandiri</Text>
-          <Text style={styles.alarmSub}>
-            Pemberitahuan terjadwal aktif secara lokal
-          </Text>
+      {/* STATUS: MEMUAT / ERROR / KOSONG / DAFTAR */}
+      {loading ? (
+        <View style={styles.stateBox}>
+          <ActivityIndicator size="large" color="#073B82" />
+          <Text style={styles.stateText}>Memuat notifikasi dari server...</Text>
         </View>
-        <View style={styles.activeDot} />
-      </View>
-
-      {/* LIST NOTIFIKASI */}
-      {notifications.map((item) => (
-        <View
-          key={item.id}
-          style={[
-            styles.notifCard,
-            item.isUnread && styles.notifCardUnread,
-          ]}
-        >
-          <View style={styles.notifTopRow}>
-            <View
-              style={[styles.iconContainer, { backgroundColor: item.iconBg }]}
-            >
-              <Text style={styles.iconStyle}>{item.icon}</Text>
-            </View>
-
-            <View style={styles.metaCol}>
-              <View style={styles.labelTimeRow}>
-                <Text
-                  style={[
-                    styles.typeLabel,
-                    item.type === "deadline_h1"
-                      ? styles.typeRed
-                      : item.type === "deadline_changed"
-                      ? styles.typeBlue
-                      : styles.typeGrey,
-                  ]}
-                >
-                  {item.titleLabel}
-                </Text>
-                <Text style={styles.timeText}>{item.time}</Text>
+      ) : error ? (
+        <View style={styles.errorBox}>
+          <Text style={styles.errorTitle}>Gagal Memuat Notifikasi</Text>
+          <Text style={styles.errorDesc}>{error}</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={onRefresh}>
+            <Text style={styles.retryBtnText}>🔄 Coba Lagi</Text>
+          </TouchableOpacity>
+        </View>
+      ) : notifications.length === 0 ? (
+        <View style={styles.stateBox}>
+          <Text style={styles.emptyIcon}>🔔</Text>
+          <Text style={styles.stateText}>Belum ada notifikasi.</Text>
+        </View>
+      ) : (
+        notifications.map((item) => (
+          <View
+            key={String(item.id)}
+            style={[styles.notifCard, item.isUnread && styles.notifCardUnread]}
+          >
+            <View style={styles.notifTopRow}>
+              <View style={[styles.iconContainer, { backgroundColor: item.iconBg }]}>
+                <Text style={styles.iconStyle}>{item.icon}</Text>
               </View>
 
-              <Text style={styles.messageText}>{item.message}</Text>
-
-              {/* JIKA ADA TAG MATA KULIAH */}
-              {item.matkulTag && (
-                <View style={styles.tagsRow}>
-                  <Text style={styles.tagItem}>📁 {item.matkulTag} ›</Text>
-                  <Text style={styles.tagItem}>{item.subTag}</Text>
-                </View>
-              )}
-
-              {/* JIKA ADA ALASAN PERUBAHAN */}
-              {item.reason && (
-                <View style={styles.reasonBox}>
-                  <Text style={styles.reasonLabel}>
-                    Alasan Perubahan: "{item.reason}"
+              <View style={styles.metaCol}>
+                <View style={styles.labelTimeRow}>
+                  <Text
+                    style={[
+                      styles.typeLabel,
+                      item.type === "deadline_h1"
+                        ? styles.typeRed
+                        : item.type === "deadline_changed"
+                        ? styles.typeBlue
+                        : styles.typeGrey,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {item.titleLabel}
                   </Text>
+                  <Text style={styles.timeText}>{item.time}</Text>
                 </View>
-              )}
 
-              {/* ACTION BUTTON */}
-              {item.type === "deadline_h1" && (
-                <TouchableOpacity
-                  style={styles.openTaskBtn}
-                  onPress={() => {
-                    if (onOpenTask) onOpenTask();
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.openTaskBtnText}>Buka Tugas</Text>
-                </TouchableOpacity>
-              )}
+                <Text style={styles.messageText}>{item.message}</Text>
 
-              {item.type === "deadline_changed" && (
-                <TouchableOpacity
-                  style={styles.scheduleLink}
-                  onPress={() => {
-                    if (onOpenTask) onOpenTask();
-                  }}
-                >
-                  <Text style={styles.scheduleLinkText}>
-                    🔍 Cek Detail Jadwal
-                  </Text>
-                </TouchableOpacity>
-              )}
+                {/* TAG MATA KULIAH (JIKA ADA) */}
+                {(item.matkulTag || item.subTag) && (
+                  <View style={styles.tagsRow}>
+                    {item.matkulTag ? (
+                      <Text style={styles.tagItem}>📁 {item.matkulTag}</Text>
+                    ) : null}
+                    {item.subTag ? (
+                      <Text style={styles.tagItem} numberOfLines={1}>
+                        {item.subTag}
+                      </Text>
+                    ) : null}
+                  </View>
+                )}
 
-              {item.sentStatus && (
-                <Text style={styles.sentStatusText}>{item.sentStatus}</Text>
-              )}
+                {/* ALASAN PERUBAHAN (JIKA ADA) */}
+                {item.reason ? (
+                  <View style={styles.reasonBox}>
+                    <Text style={styles.reasonLabel}>
+                      Alasan Perubahan: "{item.reason}"
+                    </Text>
+                  </View>
+                ) : null}
+
+                {/* TOMBOL AKSI (HANYA JIKA TERKAIT TUGAS) */}
+                {item.taskId !== undefined && item.type === "deadline_h1" && (
+                  <TouchableOpacity
+                    style={styles.openTaskBtn}
+                    onPress={() => handleOpenTask(item)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.openTaskBtnText}>Buka Tugas</Text>
+                  </TouchableOpacity>
+                )}
+
+                {item.taskId !== undefined && item.type === "deadline_changed" && (
+                  <TouchableOpacity
+                    style={styles.scheduleLink}
+                    onPress={() => handleOpenTask(item)}
+                  >
+                    <Text style={styles.scheduleLinkText}>🔍 Cek Detail Jadwal</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {item.isUnread && <View style={styles.unreadDot} />}
             </View>
-
-            {item.isUnread && <View style={styles.unreadDot} />}
           </View>
-        </View>
-      ))}
-
-      {/* FOOTER SYNC */}
-      <View style={styles.footerNote}>
-        <Text style={styles.footerCheck}>✔</Text>
-        <Text style={styles.footerNoteText}>
-          Semua notifikasi sinkron dengan database lokal
-        </Text>
-      </View>
+        ))
+      )}
 
       <View style={{ height: 40 }} />
     </ScrollView>
@@ -204,26 +292,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  offlineStrip: {
-    backgroundColor: "#FEF3C7",
-    paddingVertical: 7,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginBottom: 14,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#FDE68A",
-  },
-  offlineStripText: {
-    fontSize: 11,
-    color: "#92400E",
-    fontWeight: "600",
-  },
   topHeaderRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 12,
+    minHeight: 24,
   },
   titleWithCount: {
     flexDirection: "row",
@@ -251,35 +325,51 @@ const styles = StyleSheet.create({
     color: "#073B82",
     fontWeight: "700",
   },
-  alarmBanner: {
-    flexDirection: "row",
+  stateBox: {
     alignItems: "center",
-    backgroundColor: "#EFF6FF",
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 12,
+    justifyContent: "center",
+    paddingVertical: 40,
+    gap: 10,
+  },
+  emptyIcon: {
+    fontSize: 36,
+  },
+  stateText: {
+    fontSize: 12,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+  errorBox: {
+    backgroundColor: "#FEF2F2",
+    borderRadius: 16,
+    padding: 18,
+    alignItems: "center",
     borderWidth: 1,
-    borderColor: "#BFDBFE",
-    marginBottom: 14,
+    borderColor: "#FECACA",
   },
-  alarmIcon: {
-    fontSize: 16,
-    marginRight: 8,
-  },
-  alarmTitle: {
-    fontSize: 11,
+  errorTitle: {
+    fontSize: 14,
     fontWeight: "800",
-    color: "#1E40AF",
+    color: "#B91C1C",
   },
-  alarmSub: {
-    fontSize: 10,
-    color: "#3B82F6",
+  errorDesc: {
+    fontSize: 12,
+    color: "#7F1D1D",
+    textAlign: "center",
+    lineHeight: 18,
+    marginTop: 6,
+    marginBottom: 12,
   },
-  activeDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#2563EB",
+  retryBtn: {
+    backgroundColor: "#073B82",
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 18,
+  },
+  retryBtnText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "800",
   },
   notifCard: {
     backgroundColor: "#FFFFFF",
@@ -316,8 +406,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 4,
+    gap: 8,
   },
   typeLabel: {
+    flex: 1,
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 0.5,
@@ -388,11 +480,6 @@ const styles = StyleSheet.create({
     color: "#2563EB",
     fontWeight: "700",
   },
-  sentStatusText: {
-    fontSize: 10,
-    color: "#15803D",
-    fontWeight: "600",
-  },
   unreadDot: {
     width: 8,
     height: 8,
@@ -400,20 +487,5 @@ const styles = StyleSheet.create({
     backgroundColor: "#2563EB",
     marginLeft: 6,
     marginTop: 4,
-  },
-  footerNote: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingVertical: 14,
-  },
-  footerCheck: {
-    fontSize: 11,
-    color: "#16A34A",
-    marginRight: 6,
-  },
-  footerNoteText: {
-    fontSize: 11,
-    color: "#94A3B8",
   },
 });

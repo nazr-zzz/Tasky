@@ -6,13 +6,23 @@ import {
   TouchableOpacity,
   StyleSheet,
   Alert,
-  Clipboard,
   ScrollView,
   SafeAreaView,
   StatusBar,
   ActivityIndicator,
 } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { createClass } from "../services/api";
+
+// Buat kode undangan acak 6 karakter (huruf besar & angka, tanpa karakter yang mudah tertukar)
+function buatKodeKelas() {
+  const huruf = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let kode = "";
+  for (let i = 0; i < 6; i++) {
+    kode += huruf.charAt(Math.floor(Math.random() * huruf.length));
+  }
+  return kode;
+}
 
 export default function BuatKelasScreen({
   currentUser,
@@ -29,44 +39,42 @@ export default function BuatKelasScreen({
       return;
     }
 
+    if (!currentUser?.userId) {
+      Alert.alert("Sesi Berakhir", "Silakan login ulang.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const generatedCode = "PWL-" + Math.floor(1000 + Math.random() * 9000);
-      const res = await createClass(
-        namaKelas.trim(),
-        generatedCode,
-        currentUser?.userId || "u_pjmk_dimas"
-      );
+      const generatedCode = buatKodeKelas();
+      const res = await createClass(namaKelas.trim(), generatedCode, currentUser.userId);
 
-      const cls = res.kelas || {
-        nama_kelas: namaKelas.trim(),
-        kode_kelas: generatedCode,
-        kelas_id: "k_" + Date.now(),
+      // Pakai data dari server; jika server tidak mengirim detail, pakai kode yang baru saja diterima server
+      const dariServer = res?.kelas || {};
+      const cls = {
+        ...dariServer,
+        nama_kelas: dariServer.nama_kelas ?? dariServer.NAMA_KELAS ?? namaKelas.trim(),
+        kode_kelas: dariServer.kode_kelas ?? dariServer.KODE_KELAS ?? generatedCode,
+        kelas_id: dariServer.kelas_id ?? dariServer.KELAS_ID,
       };
 
       setCreatedClass(cls);
-      if (onClassCreated) onClassCreated(cls);
+      if (onClassCreated) await onClassCreated(cls);
     } catch (e) {
-      // Fallback offline
-      const fallbackCode = "PWL-" + Math.floor(1000 + Math.random() * 9000);
-      const fallbackCls = {
-        nama_kelas: namaKelas.trim(),
-        kode_kelas: fallbackCode,
-        kelas_id: "k_" + Date.now(),
-        dibuat_oleh: currentUser?.userId || "u_pjmk_dimas",
-      };
-      setCreatedClass(fallbackCls);
-      if (onClassCreated) onClassCreated(fallbackCls);
+      Alert.alert("Gagal Membuat Kelas", e?.message || "Tidak dapat terhubung ke server.");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCopyCode = () => {
-    if (Clipboard && Clipboard.setString && createdClass?.kode_kelas) {
-      Clipboard.setString(createdClass.kode_kelas);
+  const handleCopyCode = async () => {
+    if (!createdClass?.kode_kelas) return;
+    try {
+      await Clipboard.setStringAsync(String(createdClass.kode_kelas));
+      Alert.alert("Disalin! 📋", `Kode kelas ${createdClass.kode_kelas} berhasil disalin ke clipboard.`);
+    } catch (e) {
+      Alert.alert("Gagal", "Kode kelas tidak dapat disalin.");
     }
-    Alert.alert("Disalin! 📋", `Kode kelas ${createdClass?.kode_kelas} berhasil disalin ke clipboard.`);
   };
 
   const handleShare = () => {
@@ -85,10 +93,10 @@ export default function BuatKelasScreen({
         <TouchableOpacity style={styles.backBtn} onPress={onBack}>
           <Text style={styles.backIcon}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Detail Tugas</Text>
+        <Text style={styles.headerTitle}>Buat Kelas</Text>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>
-            {(currentUser?.nama || "D").charAt(0).toUpperCase()}
+            {(currentUser?.nama || "?").charAt(0).toUpperCase()}
           </Text>
         </View>
       </View>
@@ -192,12 +200,6 @@ export default function BuatKelasScreen({
             </View>
           </View>
         )}
-
-        <View style={styles.offlineFooter}>
-          <Text style={styles.offlineFooterText}>
-            ☁️ Tersinkronisasi lokal • Siap saat offline
-          </Text>
-        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -467,13 +469,5 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: "#64748B",
     lineHeight: 16,
-  },
-  offlineFooter: {
-    alignItems: "center",
-    marginTop: 10,
-  },
-  offlineFooterText: {
-    fontSize: 11,
-    color: "#94A3B8",
   },
 });

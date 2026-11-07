@@ -22,9 +22,9 @@ export default function TambahTugasModal({
 }) {
   const [judulTugas, setJudulTugas] = useState(editingTask?.title || "");
   const [mataKuliah, setMataKuliah] = useState(
-    editingTask?.subject || currentClass?.nama_kelas || "Basis Data A"
+    editingTask?.subject || currentClass?.nama_kelas || ""
   );
-  const [deadline, setDeadline] = useState(editingTask?.deadline || "Besok, 23:59 WIB");
+  const [deadline, setDeadline] = useState(editingTask?.deadline || "");
   const [deskripsi, setDeskripsi] = useState(editingTask?.description || "");
   const [lampiran, setLampiran] = useState(editingTask?.attachment || "PDF / Dokumen");
   const [loading, setLoading] = useState(false);
@@ -35,64 +35,41 @@ export default function TambahTugasModal({
       return;
     }
 
+    if (!currentClass?.kelas_id || !currentUser?.userId) {
+      Alert.alert("Gagal", "Data kelas atau sesi login tidak ditemukan.");
+      return;
+    }
+
     setLoading(true);
     try {
       const taskPayload = {
         task_id: editingTask?.id ? String(editingTask.id) : undefined,
-        kelas_id: currentClass?.kelas_id || "k1",
-        dibuat_oleh: currentUser?.userId || "u1",
+        kelas_id: currentClass.kelas_id,
+        dibuat_oleh: currentUser.userId,
         judul_tugas: judulTugas.trim(),
         mata_kuliah: mataKuliah.trim(),
         deadline: deadline.trim(),
         deskripsi: deskripsi.trim(),
       };
 
+      let res;
       if (editingTask?.id) {
-        await updateTask(editingTask.id, {
+        res = await updateTask(editingTask.id, {
           ...taskPayload,
-          diubah_oleh: currentUser?.userId || "u1",
+          diubah_oleh: currentUser.userId,
         });
       } else {
-        await createTask(taskPayload);
+        res = await createTask(taskPayload);
       }
 
-      const newTaskObj = {
-        id: editingTask?.id || Date.now(),
-        subject: mataKuliah.trim(),
-        title: judulTugas.trim(),
-        deadline: deadline.trim(),
-        countdown: deadline.includes("Besok") ? "H-1" : "H-3",
-        creator: `Dibuat oleh PJMK (${currentUser?.nama || "Anda"})`,
-        attachment: lampiran,
-        status: "Belum Dikerjakan",
-        color: "#4D9BFF",
-      };
-
-      if (onTaskSaved) onTaskSaved(newTaskObj);
       Alert.alert(
         "Tugas Berhasil Disimpan! 🎉",
-        "Tugas telah diterbitkan dan dapat dilihat oleh seluruh anggota kelas."
+        "Tugas telah tersimpan di server dan dapat dilihat oleh seluruh anggota kelas."
       );
+      if (onTaskSaved) await onTaskSaved(res);
       onClose();
     } catch (e) {
-      // Fallback offline jika server tidak aktif
-      const fallbackTask = {
-        id: editingTask?.id || Date.now(),
-        subject: mataKuliah.trim(),
-        title: judulTugas.trim(),
-        deadline: deadline.trim(),
-        countdown: deadline.includes("Besok") ? "H-1" : "H-3",
-        creator: `Dibuat oleh PJMK (${currentUser?.nama || "Anda"})`,
-        attachment: lampiran,
-        status: "Belum Dikerjakan",
-        color: "#FFB632",
-      };
-      if (onTaskSaved) onTaskSaved(fallbackTask);
-      Alert.alert(
-        "Tersimpan Secara Lokal",
-        "Tugas berhasil ditambahkan ke daftar tugas Anda."
-      );
-      onClose();
+      Alert.alert("Gagal Menyimpan Tugas", e?.message || "Tidak dapat terhubung ke server.");
     } finally {
       setLoading(false);
     }

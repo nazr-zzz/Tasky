@@ -11,6 +11,28 @@ import {
 } from "react-native";
 import { updateTask } from "../services/api";
 
+const BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+const KUNCI_BULAN = {
+  jan: 0, feb: 1, mar: 2, apr: 3, mei: 4, may: 4, jun: 5, jul: 6,
+  agu: 7, agt: 7, aug: 7, sep: 8, okt: 9, oct: 9, nov: 10, des: 11, dec: 11,
+};
+
+// Hitung tanggal baru (+N hari) dari teks deadline seperti "16 Nov 2024, 23:59 WIB"
+function tambahHari(deadline, hari) {
+  const s = String(deadline || "");
+  const m = s.match(/(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
+  if (!m) return null;
+  const bulan = KUNCI_BULAN[m[2].slice(0, 3).toLowerCase()];
+  if (bulan === undefined) return null;
+  const d = new Date(Number(m[3]), bulan, Number(m[1]));
+  d.setDate(d.getDate() + hari);
+  const jam = s.match(/(\d{1,2}:\d{2})/);
+  return {
+    tanggal: `${d.getDate()} ${BULAN[d.getMonth()]} ${d.getFullYear()}`,
+    jam: jam ? `${jam[1]} WIB` : "",
+  };
+}
+
 export default function UbahDeadlineModal({
   visible,
   task,
@@ -18,59 +40,61 @@ export default function UbahDeadlineModal({
   onClose,
   onDeadlineUpdated,
 }) {
-  const currentTask = task || {
-    id: "t_pwl_jwt",
-    subject: "Pemrograman Web Lanjut",
-    title: "RESTful API & Autentikasi JWT",
-    deadline: "15 Nov 2024, 23:59 WIB",
-  };
+  const currentTask = task || { subject: "-", title: "-", deadline: "-" };
 
-  const [tanggalBaru, setTanggalBaru] = useState("20 November 2024");
-  const [jamBaru, setJamBaru] = useState("23:59 WIB");
-  const [alasan, setAlasan] = useState(
-    "Dosen pengampu memberikan dispensasi penyesuaian materi koneksi"
-  );
+  const [tanggalBaru, setTanggalBaru] = useState("");
+  const [jamBaru, setJamBaru] = useState("");
+  const [alasan, setAlasan] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleQuickExtend = () => {
-    setTanggalBaru("20 November 2024");
-    Alert.alert("Perpanjangan Cepat", "Tenggat waktu diperpanjang +5 hari.");
+    const hasil = tambahHari(currentTask.deadline, 5);
+    if (!hasil) {
+      Alert.alert(
+        "Tidak Dapat Menghitung",
+        "Format deadline saat ini tidak dikenali. Isi tanggal baru secara manual."
+      );
+      return;
+    }
+    setTanggalBaru(hasil.tanggal);
+    if (hasil.jam) setJamBaru(hasil.jam);
   };
 
   const handleSimpan = async () => {
-    setLoading(true);
-    const deadlineString = `${tanggalBaru}, ${jamBaru}`;
+    if (!tanggalBaru.trim() || !jamBaru.trim()) {
+      Alert.alert("Perhatian", "Tanggal dan jam deadline baru wajib diisi.");
+      return;
+    }
+    if (!currentTask.id || !currentUser?.userId) {
+      Alert.alert("Gagal", "Data tugas atau sesi login tidak ditemukan.");
+      return;
+    }
 
+    const jam = jamBaru.trim();
+    const deadlineString = `${tanggalBaru.trim()}, ${/wib/i.test(jam) ? jam : `${jam} WIB`}`;
+
+    setLoading(true);
     try {
-      if (currentTask.id) {
-        await updateTask(currentTask.id, {
-          judul_tugas: currentTask.title,
-          mata_kuliah: currentTask.subject,
-          deadline: deadlineString,
-          deskripsi: currentTask.description,
-          diubah_oleh: currentUser?.userId || "u_pjmk_dimas",
-        });
-      }
+      await updateTask(currentTask.id, {
+        kelas_id: currentTask.kelas_id,
+        judul_tugas: currentTask.title,
+        mata_kuliah: currentTask.subject,
+        deadline: deadlineString,
+        deskripsi: currentTask.description,
+        diubah_oleh: currentUser.userId,
+        alasan: alasan.trim(),
+      });
 
       Alert.alert(
         "Deadline Berhasil Diperbarui! ⏰",
-        `Batas waktu tugas diubah menjadi ${deadlineString}.\nNotifikasi telah dikirimkan ke seluruh anggota kelas.`
+        `Batas waktu tugas diubah menjadi ${deadlineString}.`
       );
 
-      if (onDeadlineUpdated) {
-        onDeadlineUpdated(currentTask.id, deadlineString, alasan);
-      }
+      // Dashboard mengambil ulang data terbaru dari server
+      if (onDeadlineUpdated) await onDeadlineUpdated(currentTask.id, deadlineString, alasan.trim());
       onClose();
     } catch (e) {
-      // Fallback offline
-      Alert.alert(
-        "Diperbarui Secara Lokal",
-        `Deadline tugas telah diubah menjadi ${deadlineString}.`
-      );
-      if (onDeadlineUpdated) {
-        onDeadlineUpdated(currentTask.id, deadlineString, alasan);
-      }
-      onClose();
+      Alert.alert("Gagal Memperbarui Deadline", e?.message || "Tidak dapat terhubung ke server.");
     } finally {
       setLoading(false);
     }
@@ -125,6 +149,8 @@ export default function UbahDeadlineModal({
             <Text style={styles.inputIcon}>📅</Text>
             <TextInput
               style={styles.textInput}
+              placeholder="Contoh: 20 Nov 2024"
+              placeholderTextColor="#94A3B8"
               value={tanggalBaru}
               onChangeText={setTanggalBaru}
             />
@@ -136,6 +162,8 @@ export default function UbahDeadlineModal({
             <Text style={styles.inputIcon}>🕒</Text>
             <TextInput
               style={styles.textInput}
+              placeholder="Contoh: 23:59"
+              placeholderTextColor="#94A3B8"
               value={jamBaru}
               onChangeText={setJamBaru}
             />
@@ -164,7 +192,7 @@ export default function UbahDeadlineModal({
             <Text style={styles.notifPreviewText}>
               Notifikasi{" "}
               <Text style={styles.boldText}>"Perubahan Deadline dari PJMK"</Text>{" "}
-              akan dikirim ke 48 mahasiswa.
+              akan dikirim ke seluruh anggota kelas.
             </Text>
           </View>
 
@@ -391,4 +419,3 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
   },
 });
-
