@@ -1,7 +1,8 @@
 import express from "express";
 import bcrypt from "bcrypt";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomInt } from "node:crypto";
 import { pool } from "../db.js";
+import { kirimEmailKode } from "../mailer.js";
 
 const router = express.Router();
 
@@ -205,6 +206,150 @@ router.put("/profile/:userId", async (req, res) => {
   } catch (error) {
     console.error("Gagal memperbarui profil:", error.message);
     res.status(500).json({ pesan: "Gagal memperbarui profil pengguna" });
+  }
+});
+
+// =========================================================================
+// POST /api/auth/lupa-password: kirim kode OTP 6 digit ke email terdaftar
+router.post("/lupa-password", async (req, res) => {
+  const pesanUmum = "Jika email terdaftar, kode verifikasi telah dikirim.";
+
+  try {
+    const email = (req.body.email || "").trim().toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({ pesan: "Email wajib diisi." });
+    }
+
+    const [users] = await pool.execute(
+      "SELECT USER_ID, NAMA FROM user WHERE EMAIL = ? LIMIT 1",
+      [email]
+    );
+
+    // Respons sama baik email terdaftar maupun tidak (mencegah tebak-tebakan email)
+    if (users.length === 0) {
+      return res.status(200).json({ pesan: pesanUmum });
+    }
+
+    const user = users[0];
+
+    // Batasi permintaan: 1 kode per 60 detik per akun
+    const [terbaru] = await pool.execute(
+      `SELECT ID FROM password_reset
+       WHERE USER_ID = ? AND CREATED_AT > DATE_SUB(NOW(), INTERVAL 60 SECOND)
+       LIMIT 1`,
+      [user.USER_ID]
+    );
+    if (terbaru.length > 0) {
+      return res.status(200).json({ pesan: pesanUmum });
+    }
+
+    const kode = String(randomInt(0, 1000000)).padStart(6, "0");
+    const kodeHash = await bcrypt.hash(kode, 10);
+
+    // Hapus kode lama, simpan kode baru (berlaku 10 menit)
+    await pool.execute("DELETE FROM password_reset WHERE USER_ID = ?", [
+      user.USER_ID,
+    ]);
+    await pool.execute(
+      `INSERT INTO password_reset (USER_ID, KODE_HASH, EXPIRES_AT)
+       VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))`,
+      [user.USER_ID, kodeHash]
+    );
+
+    try {
+      await kirimEmailKode(email, user.NAMA, kode);
+    } catch (errEmail) {
+      console.error("Gagal mengirim email:", errEmail.message);
+      await pool.execute("DELETE FROM password_reset WHERE USER_ID = ?", [
+        user.USER_ID,
+      ]);
+      return res.status(500).json({
+        pesan: "Gagal mengirim email. Coba lagi nanti.",
+      });
+    }
+
+    return res.status(200).json({ pesan: pesanUmum });
+  } catch (error) {
+    console.error("Lupa password gagal:", error.message);
+    return res.status(500).json({ pesan: "Terjadi kesalahan pada server." });
+  }
+});
+
+// POST /api/auth/reset-password: verifikasi kode lalu ganti kata sandi
+router.post("/reset-password", async (req, res) => {
+  const pesanSalah = "Kode salah atau sudah kedaluwarsa.";
+
+  try {
+    const email = (req.body.email || "").trim().toLowerCase();
+    const kode = String(req.body.kode || "").trim();
+    const passwordBaru = req.body.passwordBaru || "";
+
+    if (!email || !kode || !passwordBaru) {
+      return res.status(400).json({ pesan: "Semua kolom wajib diisi." });
+    }
+    if (!/^\d{6}$/.test(kode)) {
+      return res.status(400).json({ pesan: "Kode harus 6 digit angka." });
+    }
+    if (passwordBaru.length < 8) {
+      return res
+        .status(400)
+        .json({ pesan: "Kata sandi baru minimal 8 karakter." });
+    }
+
+    const [users] = await pool.execute(
+      "SELECT USER_ID FROM user WHERE EMAIL = ? LIMIT 1",
+      [email]
+    );
+    if (users.length === 0) {
+      return res.status(400).json({ pesan: pesanSalah });
+    }
+    const userId = users[0].USER_ID;
+
+    const [rows] = await pool.execute(
+      `SELECT ID, KODE_HASH, ATTEMPTS FROM password_reset
+       WHERE USER_ID = ? AND EXPIRES_AT > NOW()
+       ORDER BY ID DESC LIMIT 1`,
+      [userId]
+    );
+    if (rows.length === 0) {
+      return res.status(400).json({ pesan: pesanSalah });
+    }
+    const reset = rows[0];
+
+    if (reset.ATTEMPTS >= 5) {
+      await pool.execute("DELETE FROM password_reset WHERE USER_ID = ?", [
+        userId,
+      ]);
+      return res.status(400).json({
+        pesan: "Terlalu banyak percobaan. Silakan minta kode baru.",
+      });
+    }
+
+    const valid = await bcrypt.compare(kode, reset.KODE_HASH);
+    if (!valid) {
+      await pool.execute(
+        "UPDATE password_reset SET ATTEMPTS = ATTEMPTS + 1 WHERE ID = ?",
+        [reset.ID]
+      );
+      return res.status(400).json({ pesan: pesanSalah });
+    }
+
+    const hashed = await bcrypt.hash(passwordBaru, 10);
+    await pool.execute("UPDATE user SET PASSWORD = ? WHERE USER_ID = ?", [
+      hashed,
+      userId,
+    ]);
+    await pool.execute("DELETE FROM password_reset WHERE USER_ID = ?", [
+      userId,
+    ]);
+
+    return res.status(200).json({
+      pesan: "Kata sandi berhasil diubah. Silakan masuk.",
+    });
+  } catch (error) {
+    console.error("Reset password gagal:", error.message);
+    return res.status(500).json({ pesan: "Terjadi kesalahan pada server." });
   }
 });
 

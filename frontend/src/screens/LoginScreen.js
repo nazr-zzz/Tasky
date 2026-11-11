@@ -242,6 +242,17 @@ export default function LoginScreen() {
               <Text style={styles.eyeIcon}>{showPassword ? "👁️" : "👁️‍🗨️"}</Text>
             </TouchableOpacity>
           </View>
+          
+           {authMode === "masuk" && (
+            <TouchableOpacity
+              onPress={() => router.push("/lupa-password")}
+              style={{ alignSelf: "flex-end", marginBottom: 4 }}
+            >
+              <Text style={{ fontSize: 12, fontWeight: "700", color: "#073B82" }}>
+                Lupa kata sandi?
+              </Text>
+            </TouchableOpacity>
+          )}
 
           {/* CHECKBOX PERSETUJUAN (KHUSUS DAFTAR) */}
           {authMode === "daftar" && (
