@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -36,6 +36,9 @@ import {
   CURRENT_LAN_IP,
   BACKEND_PORT,
 } from "../services/api";
+
+import * as Notifications from "expo-notifications";
+import { sinkronPengingat } from "../services/pengingat";
 
 const DaftarTugasKelasComp: any = DaftarTugasKelasScreen;
 const DetailTugasComp: any = DetailTugasScreen;
@@ -165,6 +168,39 @@ export default function Dashboard() {
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string>("");
+
+  // ---- PENGINGAT DEADLINE (H-3 / H-2 / H-1 / Hari H) ----
+  // Jadwalkan ulang setiap kali daftar tugas berubah (tugas baru, deadline diubah,
+  // tugas selesai/dihapus) atau pilihan pengingat diganti.
+  const tasksRef = useRef<any[]>([]);
+  tasksRef.current = tasks;
+
+  const jadwalkanPengingat = async () => {
+    if (!currentUser.userId) return;
+    try {
+      await sinkronPengingat(tasksRef.current, currentUser.userId);
+    } catch (e: any) {
+      console.warn("Gagal menjadwalkan pengingat:", e?.message);
+    }
+  };
+
+  useEffect(() => {
+    if (loading) return; // tunggu data pertama dari server
+    jadwalkanPengingat();
+  }, [tasks, loading]);
+
+  // Ketuk notifikasi pengingat -> buka detail tugas terkait
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
+      const taskId = resp.notification.request.content.data?.taskId;
+      const target = tasksRef.current.find((t) => String(t.id) === String(taskId));
+      if (target) {
+        setSelectedTask(target);
+        setSubView("detail-tugas");
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   // Jika tidak ada sesi login, kembali ke halaman login
   useEffect(() => {
@@ -698,6 +734,7 @@ export default function Dashboard() {
         <View style={{ flex: 1, paddingHorizontal: 16, paddingTop: 10 }}>
           <NotifikasiComp
             currentUser={currentUser}
+            onPengingatChanged={jadwalkanPengingat}
             onOpenTask={() => {
               if (tasks.length > 0) {
                 setSelectedTask(tasks[0]);
