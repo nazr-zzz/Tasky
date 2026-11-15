@@ -16,6 +16,7 @@ import {
   CURRENT_LAN_IP,
   BACKEND_PORT,
 } from "../services/api";
+import { batalkanSemuaPengingat } from "../services/pengingat";
 
 export default function ProfilScreen({
   currentUser,
@@ -57,7 +58,10 @@ export default function ProfilScreen({
       {
         text: "Keluar",
         style: "destructive",
-        onPress: () => router.replace("/"),
+        onPress: async () => {
+          await batalkanSemuaPengingat();
+          router.replace("/");
+        },
       },
     ]);
   };

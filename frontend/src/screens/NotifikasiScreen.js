@@ -14,6 +14,7 @@ import {
   markNotificationRead,
   markAllNotificationsRead,
 } from "../services/api";
+import PengaturanPengingat from "./PengaturanPengingat";
 
 // =========================================================================
 // HELPER: pemetaan data notifikasi dari server
@@ -88,7 +89,7 @@ function mapNotif(n) {
   };
 }
 
-export default function NotifikasiScreen({ currentUser, onOpenTask }) {
+export default function NotifikasiScreen({ currentUser, onOpenTask, onPengingatChanged }) {
   const userId = currentUser?.userId;
 
   const [notifications, setNotifications] = useState([]);
@@ -163,6 +164,9 @@ export default function NotifikasiScreen({ currentUser, onOpenTask }) {
       showsVerticalScrollIndicator={false}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
+      {/* PENGATURAN PENGINGAT DEADLINE (H-3 / H-2 / H-1 / Hari H) */}
+      <PengaturanPengingat userId={userId} onChanged={onPengingatChanged} />
+
       {/* HEADER SECTION: NOTIFIKASI [N BARU] & TANDAI DIBACA */}
       <View style={styles.topHeaderRow}>
         <View style={styles.titleWithCount}>
