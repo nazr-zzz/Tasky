@@ -154,6 +154,47 @@ export async function registerUser(nama, nim, email, password) {
   return data;
 }
 
+export async function kirimKodeReset(email) {
+  const baseUrl = getBaseUrl();
+
+  const response = await fetchWithTimeout(
+    `${baseUrl}/api/auth/lupa-password`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.pesan || "Gagal mengirim kode verifikasi.");
+  }
+
+  return data;
+}
+
+export async function resetPasswordDenganKode(email, kode, passwordBaru) {
+  const baseUrl = getBaseUrl();
+
+  const response = await fetchWithTimeout(
+    `${baseUrl}/api/auth/reset-password`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, kode, passwordBaru }),
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.pesan || "Gagal mengubah kata sandi.");
+  }
+
+  return data;
+}
 // =====================================================
 // KELAS SERVICES (US-01, US-02, US-09)
 // =====================================================
