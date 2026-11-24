@@ -34,7 +34,10 @@ export default function DetailTugasScreen({
   const isPJMK =
     currentUser?.role?.includes("PJMK") ||
     currentUser?.email?.includes("pjmk") ||
-    currentUser?.nama?.includes("Dimas");
+    currentUser?.nama?.toLowerCase().includes("dimas") ||
+    task?.isPjmk ||
+    String(task?.dibuat_oleh) === String(currentUser?.userId) ||
+    String(task?.DIBUAT_OLEH) === String(currentUser?.userId);
 
   const [personalStatus, setPersonalStatus] = useState(
     currentTask.status === "Selesai" ? "selesai" : "belum"

@@ -26,12 +26,16 @@ app.use((req, res, next) => {
   next();
 });
 
-// Routes
+// Routes (dukung dengan atau tanpa prefix /api)
 app.use("/tasks", taskRoutes);
-app.use("/api/tasks", taskRoutes); // alias kompatibilitas
+app.use("/api/tasks", taskRoutes);
+app.use("/auth", authRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/kelas", kelasRoutes);
 app.use("/api/kelas", kelasRoutes);
+app.use("/catatan", catatanRoutes);
 app.use("/api/catatan", catatanRoutes);
+app.use("/notifications", notifRoutes);
 app.use("/api/notifications", notifRoutes);
 
 app.get("/", (req, res) => {

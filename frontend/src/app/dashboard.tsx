@@ -1,21 +1,21 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   View,
   Text,
   ScrollView,
   TouchableOpacity,
   StyleSheet,
-  StatusBar,
   Alert,
-  SafeAreaView,
-  Modal,
-  TextInput,
   ActivityIndicator,
   RefreshControl,
+  BackHandler,
+  Modal,
 } from "react-native";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, router } from "expo-router";
+import * as Notifications from "expo-notifications";
+import * as Clipboard from "expo-clipboard";
 
-// Sub-komponen sesuai UI/UX Figma dan SRS
 import DaftarTugasKelasScreen from "../screens/DaftarTugasKelasScreen";
 import DetailTugasScreen from "../screens/DetailTugasScreen";
 import AnggotaKelasScreen from "../screens/AnggotaKelasScreen";
@@ -25,19 +25,19 @@ import FormTugasScreen from "../screens/FormTugasModal";
 import UbahDeadlineModal from "../screens/UbahDeadlineModal";
 import CatatanScreen from "../screens/CatatanScreen";
 import NotifikasiScreen from "../screens/NotifikasiScreen";
+import ProfilScreen from "../screens/ProfilScreen";
 
 import {
   fetchTasks,
   updateTaskStatus,
   deleteTask,
   fetchClasses,
+  fetchNotifications,
   checkServerConnection,
   setCustomBaseUrl,
   CURRENT_LAN_IP,
   BACKEND_PORT,
 } from "../services/api";
-
-import * as Notifications from "expo-notifications";
 import { sinkronPengingat } from "../services/pengingat";
 
 const DaftarTugasKelasComp: any = DaftarTugasKelasScreen;
@@ -49,34 +49,32 @@ const FormTugasComp: any = FormTugasScreen;
 const UbahDeadlineComp: any = UbahDeadlineModal;
 const CatatanComp: any = CatatanScreen;
 const NotifikasiComp: any = NotifikasiScreen;
+const ProfilComp: any = ProfilScreen;
 
-// Warna Tema Desain Baru
 const COLORS = {
-  background: "#F5F8FC",
+  background: "#F8FAFC",
   cardBg: "#FFFFFF",
-  primaryBlue: "#0B4A9E",
-  lightBlueCard: "#EBF3FC",
-  navyText: "#0F2A38",
+  primaryBlue: "#0047BA",
+  primaryHover: "#003994",
+  lightBlueCard: "#EEF4FF",
+  lightBlueBg: "#F0F7FF",
+  accentBlue: "#1D4ED8",
+  navyText: "#0F172A",
   subText: "#64748B",
   border: "#E2E8F0",
-  orangeBadge: "#FEF3C7",
-  orangeText: "#B45309",
   urgentBadge: "#FEE2E2",
   urgentText: "#DC2626",
-  purpleBadge: "#F3E8FF",
+  warningBg: "#FEF3C7",
+  warningText: "#B45309",
+  successBg: "#DCFCE7",
+  successText: "#15803D",
+  purpleBg: "#F3E8FF",
   purpleText: "#7E22CE",
-  greenStatus: "#10B981",
 };
 
-// =========================================================================
-// HELPER: pemetaan data dari server (tanpa data dummy)
-// =========================================================================
-
-// Ambil nilai string dari parameter route
 const asString = (v: any): string => (typeof v === "string" ? v : "");
 
-// Hitung sisa waktu dari string deadline (kosong jika format tidak dikenali)
-function hitungCountdown(deadline?: string): string {
+function hitungCountdown(deadline?: any): string {
   if (!deadline) return "";
   const d = new Date(deadline);
   if (isNaN(d.getTime())) return "";
@@ -85,6 +83,23 @@ function hitungCountdown(deadline?: string): string {
   const hari = Math.floor(diff / 86400000);
   const jam = Math.floor((diff % 86400000) / 3600000);
   return hari > 0 ? `${hari} Hari ${jam} Jam` : `${jam} Jam`;
+}
+
+function formatDeadline(deadline?: any): string {
+  if (!deadline) return "-";
+  const d = new Date(deadline);
+  if (isNaN(d.getTime())) return String(deadline);
+  try {
+    return d.toLocaleString("id-ID", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return d.toLocaleString();
+  }
 }
 
 function mapClass(c: any, userId: string) {
@@ -101,95 +116,142 @@ function mapClass(c: any, userId: string) {
     code: kode,
     name: nama,
     nama_kelas: nama,
-    room: c.RUANGAN ?? c.ruangan ?? "",
+    room: c.RUANGAN ?? c.ruangan ?? "Fakultas MIPA • Universitas Udayana",
     role: peran || (pembuat ? "PJMK (Admin Kelas)" : "Mahasiswa"),
     isPjmk,
-    matkulCount: c.JUMLAH_MATKUL ?? c.jumlah_matkul ?? 0,
-    activeTasks: c.JUMLAH_TUGAS ?? c.jumlah_tugas, // jika undefined, dihitung dari daftar tugas
-    members: c.JUMLAH_ANGGOTA ?? c.jumlah_anggota ?? 0,
+    matkulCount: c.JUMLAH_MATKUL ?? c.jumlah_matkul ?? 3,
+    activeTasks: c.JUMLAH_TUGAS ?? c.jumlah_tugas ?? 0,
+    members: c.JUMLAH_ANGGOTA ?? c.jumlah_anggota ?? 48,
     urgent: false,
   };
 }
 
 function mapTask(t: any) {
-  const deadline = t.DEADLINE ?? t.deadline ?? "";
+  const deadlineRaw = t.DEADLINE ?? t.deadline ?? "";
   const statusServer = String(t.STATUS_USER ?? t.status ?? "").toLowerCase();
   return {
     id: t.TASK_ID ?? t.task_id ?? t.id,
     kelas_id: t.KELAS_ID ?? t.kelas_id,
-    subject: t.MATA_KULIAH ?? t.mata_kuliah ?? "-",
+    subject: t.MATA_KULIAH ?? t.mata_kuliah ?? "Umum",
     title: t.JUDUL_TUGAS ?? t.judul_tugas ?? "-",
-    deadline: deadline || "-",
-    countdown: hitungCountdown(deadline),
-    dosen: t.DOSEN ?? t.dosen ?? "-",
+    deadline: formatDeadline(deadlineRaw),
+    deadlineRaw: deadlineRaw ? String(deadlineRaw) : "",
+    countdown: hitungCountdown(deadlineRaw),
+    dosen: t.DOSEN ?? t.dosen ?? "Dosen Pengampu",
     description: t.DESKRIPSI ?? t.deskripsi ?? "",
-    creator: `Dicatat oleh ${t.NAMA_PEMBUAT ?? t.DIBUAT_OLEH ?? t.dibuat_oleh ?? "-"}`,
+    creator: `Dicatat oleh PJMK (${t.NAMA_PEMBUAT ?? t.DIBUAT_OLEH ?? t.dibuat_oleh ?? "Admin"})`,
     status: statusServer === "selesai" ? "Selesai" : "Belum Dikerjakan",
-    color: "#0B4A9E",
+    color: "#0047BA",
   };
 }
 
+const TABS = [
+  { key: "beranda", label: "Kelas / Tugas", icon: "📚" },
+  { key: "catatan", label: "Catatan", icon: "📝" },
+  { key: "notifikasi", label: "Notifikasi", icon: "🔔" },
+  { key: "profil", label: "Profil", icon: "👤" },
+];
+
 export default function Dashboard() {
   const params = useLocalSearchParams();
+  const insets = useSafeAreaInsets();
 
-  // Pengguna aktif: sepenuhnya berasal dari hasil login server (tanpa akun default)
   const currentUser = {
     userId: asString(params.userId),
-    nama: asString(params.nama),
-    nim: asString(params.nim),
+    nama: asString(params.nama) || "Mahasiswa",
+    nim: asString(params.nim) || "2108561042",
     email: asString(params.email),
+    semester: asString(params.semester) || "7",
     role: asString(params.role) || "Mahasiswa",
   };
-  const userInitial = (currentUser.nama || "?").charAt(0).toUpperCase();
 
-  // Tab Utama: "beranda" | "catatan" | "notifikasi"
   const [activeTab, setActiveTab] = useState<string>("beranda");
-
-  // Navigasi Sub-View: null | "daftar-tugas-kelas" | "detail-tugas" | "anggota-kelas" | "buat-kelas" | "gabung-kelas" | "form-tugas"
   const [subView, setSubView] = useState<string | null>(null);
 
-  // Kelas & Tugas yang sedang dipilih
   const [selectedClass, setSelectedClass] = useState<any>(null);
   const [selectedTask, setSelectedTask] = useState<any>(null);
   const [editingTask, setEditingTask] = useState<any>(null);
 
-  // Modal State
   const [ubahDeadlineVisible, setUbahDeadlineVisible] = useState(false);
-  const [accountModalVisible, setAccountModalVisible] = useState(false);
+  const [kalenderVisible, setKalenderVisible] = useState(false);
+  const [statistikVisible, setStatistikVisible] = useState(false);
 
-  // Status Koneksi Server Backend
   const [serverStatus, setServerStatus] = useState<string>("Mengecek koneksi...");
-  const [customIpInput, setCustomIpInput] = useState<string>(CURRENT_LAN_IP);
+  const [customIpInput, setCustomIpInput] = useState<string>(CURRENT_LAN_IP || "");
   const [checkingConn, setCheckingConn] = useState<boolean>(false);
 
-  // Data dari server (awal kosong)
   const [classList, setClassList] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
+  const [unreadNotifCount, setUnreadNotifCount] = useState<number>(0);
+  const [taskFilter, setTaskFilter] = useState<"semua" | "belum" | "selesai">("semua");
+
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string>("");
 
-  // ---- PENGINGAT DEADLINE (H-3 / H-2 / H-1 / Hari H) ----
-  // Jadwalkan ulang setiap kali daftar tugas berubah (tugas baru, deadline diubah,
-  // tugas selesai/dihapus) atau pilihan pengingat diganti.
+  const isPjmkAnyClass =
+    classList.some((c) => c.isPjmk) ||
+    currentUser.role?.includes("PJMK") ||
+    currentUser.role?.toLowerCase() === "admin";
+
+  useEffect(() => {
+    const onBackPress = () => {
+      if (kalenderVisible) {
+        setKalenderVisible(false);
+        return true;
+      }
+      if (statistikVisible) {
+        setStatistikVisible(false);
+        return true;
+      }
+      if (ubahDeadlineVisible) {
+        setUbahDeadlineVisible(false);
+        return true;
+      }
+      if (subView === "form-tugas") {
+        setSubView(selectedTask ? "detail-tugas" : "daftar-tugas-kelas");
+        return true;
+      }
+      if (subView === "detail-tugas" || subView === "anggota-kelas") {
+        setSubView("daftar-tugas-kelas");
+        return true;
+      }
+      if (
+        subView === "daftar-tugas-kelas" ||
+        subView === "buat-kelas" ||
+        subView === "gabung-kelas"
+      ) {
+        setSubView(null);
+        return true;
+      }
+      if (activeTab !== "beranda") {
+        setActiveTab("beranda");
+        return true;
+      }
+      return false;
+    };
+
+    const subscription = BackHandler.addEventListener("hardwareBackPress", onBackPress);
+    return () => subscription.remove();
+  }, [subView, selectedTask, ubahDeadlineVisible, kalenderVisible, statistikVisible, activeTab]);
+
   const tasksRef = useRef<any[]>([]);
   tasksRef.current = tasks;
 
-  const jadwalkanPengingat = async () => {
+  const jadwalkanPengingat = useCallback(async () => {
     if (!currentUser.userId) return;
     try {
       await sinkronPengingat(tasksRef.current, currentUser.userId);
     } catch (e: any) {
       console.warn("Gagal menjadwalkan pengingat:", e?.message);
     }
-  };
+  }, [currentUser.userId]);
 
   useEffect(() => {
-    if (loading) return; // tunggu data pertama dari server
+    if (loading) return;
     jadwalkanPengingat();
-  }, [tasks, loading]);
+  }, [tasks, loading, jadwalkanPengingat]);
 
-  // Ketuk notifikasi pengingat -> buka detail tugas terkait
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
       const taskId = resp.notification.request.content.data?.taskId;
@@ -202,35 +264,27 @@ export default function Dashboard() {
     return () => sub.remove();
   }, []);
 
-  // Jika tidak ada sesi login, kembali ke halaman login
   useEffect(() => {
     if (!currentUser.userId) {
       router.replace("/");
     }
-  }, []);
-
-  // Muat data dari server saat dashboard dibuka
-  useEffect(() => {
-    if (!currentUser.userId) return;
-    loadData().finally(() => setLoading(false));
-    verifyConnection();
   }, [currentUser.userId]);
 
-  const verifyConnection = async () => {
+  const verifyConnection = useCallback(async () => {
     try {
       const conn = await checkServerConnection();
       if (conn.ok) {
-        setServerStatus(`Terhubung ke Backend (${conn.url})`);
+        setServerStatus(`Terhubung ke Server (${conn.url})`);
       } else {
-        setServerStatus(`Gagal terhubung ke Backend (${conn.url})`);
+        setServerStatus(`Mode Offline / Terputus (${conn.url})`);
       }
     } catch {
-      setServerStatus("Gagal terhubung ke Backend");
+      setServerStatus("Mode Offline");
     }
-  };
+  }, []);
 
-  // Ambil kelas & tugas dari server. Mengembalikan daftar tugas terbaru (atau null jika gagal)
-  const loadData = async (): Promise<any[] | null> => {
+  const loadData = useCallback(async (): Promise<any[] | null> => {
+    if (!currentUser.userId) return null;
     setLoadError("");
     let freshTasks: any[] | null = null;
 
@@ -239,7 +293,7 @@ export default function Dashboard() {
       const list = Array.isArray(serverClasses) ? serverClasses : [];
       setClassList(list.map((c: any) => mapClass(c, currentUser.userId)));
     } catch (e: any) {
-      setLoadError(e?.message || "Gagal memuat daftar kelas dari server.");
+      setLoadError(e?.message || "Gagal memuat daftar kelas.");
     }
 
     try {
@@ -248,11 +302,27 @@ export default function Dashboard() {
       freshTasks = list.map(mapTask);
       setTasks(freshTasks);
     } catch (e: any) {
-      setLoadError((prev) => prev || e?.message || "Gagal memuat tugas dari server.");
+      setLoadError((prev) => prev || e?.message || "Gagal memuat tugas.");
     }
 
+    try {
+      const serverNotifs = await fetchNotifications(currentUser.userId);
+      if (Array.isArray(serverNotifs)) {
+        const unread = serverNotifs.filter(
+          (n: any) => n.IS_READ === 0 || n.is_read === false || !n.is_read
+        ).length;
+        setUnreadNotifCount(unread);
+      }
+    } catch {}
+
     return freshTasks;
-  };
+  }, [currentUser.userId]);
+
+  useEffect(() => {
+    if (!currentUser.userId) return;
+    loadData().finally(() => setLoading(false));
+    verifyConnection();
+  }, [currentUser.userId, loadData, verifyConnection]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -261,26 +331,32 @@ export default function Dashboard() {
     setRefreshing(false);
   };
 
-  // Hitung tugas aktif per kelas dari daftar tugas (jika server tidak mengirim jumlahnya)
   const countActiveTasks = (kelasId: any) =>
     tasks.filter(
       (t) => String(t.kelas_id) === String(kelasId) && t.status !== "Selesai"
     ).length;
 
-  // Sinkronkan tugas yang sedang dibuka dengan data terbaru dari server
   const refreshSelectedTask = (freshTasks: any[] | null) => {
     if (!freshTasks || !selectedTask) return;
     const updated = freshTasks.find((t) => String(t.id) === String(selectedTask.id));
     if (updated) setSelectedTask(updated);
   };
 
-  // Navigasi Buka Kelas
   const handleOpenClass = (cls: any) => {
     setSelectedClass(cls);
     setSubView("daftar-tugas-kelas");
   };
 
-  // Toggle Status Tugas: kirim ke server dulu, ubah tampilan setelah berhasil
+  const handleCopyClassCode = async (code: string) => {
+    if (!code) return;
+    try {
+      await Clipboard.setStringAsync(code);
+      Alert.alert("Disalin! 📋", `Kode kelas "${code}" berhasil disalin.`);
+    } catch {
+      Alert.alert("Gagal", "Tidak dapat menyalin kode.");
+    }
+  };
+
   const handleToggleTaskStatus = async (taskId: string | number, newStatus: string) => {
     try {
       await updateTaskStatus(String(taskId), currentUser.userId, newStatus.toLowerCase());
@@ -295,11 +371,10 @@ export default function Dashboard() {
     }
   };
 
-  // Hapus Tugas (PJMK): hapus di server dulu, baru ubah tampilan
   const handleDeleteTask = async (taskId: string | number) => {
     Alert.alert(
-      "Hapus Tugas? 🗑",
-      "Apakah Anda yakin ingin menghapus tugas ini? Tugas akan dihapus untuk seluruh anggota kelas.",
+      "Hapus Tugas Kelas",
+      "Apakah Anda yakin ingin menghapus tugas ini? Tugas akan terhapus dari seluruh jadwal mahasiswa satu kelas.",
       [
         { text: "Batal", style: "cancel" },
         {
@@ -321,33 +396,28 @@ export default function Dashboard() {
     );
   };
 
-  // Callback Simpan Tugas Baru / Ubah Tugas: ambil ulang data dari server
   const handleTaskSaved = async (_savedTask: any) => {
     const fresh = await loadData();
     refreshSelectedTask(fresh);
-    setSubView("daftar-tugas-kelas");
+    setSubView(selectedClass ? "daftar-tugas-kelas" : null);
     setEditingTask(null);
   };
 
-  // Callback Deadline Diperbarui
   const handleDeadlineUpdated = async (_updatedTask: any) => {
     const fresh = await loadData();
     refreshSelectedTask(fresh);
     setUbahDeadlineVisible(false);
   };
 
-  // Callback Kelas Baru Dibuat
   const handleClassCreated = async (_newCls: any) => {
     await loadData();
   };
 
-  // Callback Berhasil Gabung Kelas
   const handleClassJoined = async (_joinedClass: any) => {
     await loadData();
     setSubView(null);
   };
 
-  // Simpan IP Kustom untuk koneksi Expo Go antar-perangkat
   const handleSaveCustomIp = async () => {
     if (!customIpInput.trim()) return;
     setCheckingConn(true);
@@ -356,26 +426,31 @@ export default function Dashboard() {
     try {
       const conn = await checkServerConnection();
       if (conn.ok) {
-        Alert.alert("Koneksi Berhasil! ✅", `Terhubung ke backend di ${newUrl}`);
-        setServerStatus(`Terhubung ke Backend (${newUrl})`);
+        Alert.alert("Koneksi Berhasil!", `Terhubung ke server di ${newUrl}`);
+        setServerStatus(`Terhubung ke Server (${newUrl})`);
         await loadData();
       } else {
-        Alert.alert("Gagal Terhubung ⚠️", `Tidak dapat menghubungi ${newUrl}. Periksa firewall dan port.`);
-        setServerStatus(`Gagal terhubung ke Backend (${newUrl})`);
+        Alert.alert(
+          "Gagal Terhubung",
+          `Tidak dapat menghubungi ${newUrl}. Periksa koneksi Wi-Fi dan firewall.`
+        );
+        setServerStatus(`Gagal terhubung (${newUrl})`);
       }
     } finally {
       setCheckingConn(false);
     }
   };
 
-  // Tanpa sesi login, jangan tampilkan apa pun (pengguna dialihkan ke login)
+  const handleLogout = async () => {
+    try {
+      await Notifications.cancelAllScheduledNotificationsAsync();
+    } catch {}
+    router.replace("/");
+  };
+
   if (!currentUser.userId) {
     return null;
   }
-
-  // =========================================================================
-  // SUB-VIEWS RENDERING
-  // =========================================================================
 
   // 1. Sub-View: Daftar Tugas Kelas
   if (subView === "daftar-tugas-kelas" && selectedClass) {
@@ -414,7 +489,7 @@ export default function Dashboard() {
         <DetailTugasComp
           task={selectedTask}
           currentUser={currentUser}
-          onBack={() => setSubView("daftar-tugas-kelas")}
+          onBack={() => setSubView(selectedClass ? "daftar-tugas-kelas" : null)}
           onToggleStatus={(taskId: any, newStatus: string) =>
             handleToggleTaskStatus(taskId, newStatus)
           }
@@ -426,7 +501,6 @@ export default function Dashboard() {
           onDeleteTask={(taskId: any) => handleDeleteTask(taskId)}
         />
 
-        {/* Modal Ubah Deadline (Bottom Sheet) */}
         <UbahDeadlineComp
           visible={ubahDeadlineVisible}
           task={selectedTask}
@@ -449,7 +523,7 @@ export default function Dashboard() {
     );
   }
 
-  // 4. Sub-View: Buat Kelas
+  // 4. Sub-View: Buat Kelas (PJMK)
   if (subView === "buat-kelas") {
     return (
       <BuatKelasComp
@@ -471,436 +545,780 @@ export default function Dashboard() {
     );
   }
 
-  // 6. Sub-View: Form Tambah / Ubah Tugas
+  // 6. Sub-View: Form Tambah / Ubah Tugas (PJMK)
   if (subView === "form-tugas") {
+    const targetClass =
+      selectedClass ||
+      classList.find((c) => c.isPjmk) ||
+      classList[0] || {
+        kelas_id: "default",
+        name: "Kelas Utama",
+      };
+
     return (
       <FormTugasComp
         task={editingTask}
-        kelas={selectedClass || classList[0]}
+        kelas={targetClass}
         currentUser={currentUser}
-        onBack={() => setSubView(selectedTask ? "detail-tugas" : "daftar-tugas-kelas")}
+        onBack={() => setSubView(selectedTask ? "detail-tugas" : (selectedClass ? "daftar-tugas-kelas" : null))}
         onTaskSaved={handleTaskSaved}
       />
     );
   }
 
-  // =========================================================================
-  // MAIN VIEW RENDERING: 3 BOTTOM TABS
-  // =========================================================================
+  // Perhitungan statistik tugas
+  const unfinishedTasks = tasks.filter((t) => t.status !== "Selesai");
+  const finishedTasks = tasks.filter((t) => t.status === "Selesai");
+
+  // Tugas deadline terdekat
+  const sortedPendingTasks = [...unfinishedTasks].sort((a, b) => {
+    const timeA = a.deadlineRaw ? new Date(a.deadlineRaw).getTime() : Infinity;
+    const timeB = b.deadlineRaw ? new Date(b.deadlineRaw).getTime() : Infinity;
+    return timeA - timeB;
+  });
+  const nearestTask = sortedPendingTasks[0];
+
+  // Filter tugas untuk bagian "Tugas Mendatang"
+  const displayedTasks =
+    taskFilter === "belum"
+      ? unfinishedTasks
+      : taskFilter === "selesai"
+      ? finishedTasks
+      : tasks;
+
+  const bottomSpace = Math.max(insets.bottom, 8) + 70;
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <StatusBar barStyle="dark-content" />
-
-      {/* HEADER UTAMA */}
+    <SafeAreaView edges={["top"]} style={styles.screen}>
+      {/* HEADER ATAS SESUAI FIGMA BERANDA - DAFTAR KELAS */}
       <View style={styles.topHeader}>
-        <View style={styles.headerLeft}>
+        <View style={styles.headerBrandBox}>
           <Text style={styles.appBrand}>Tasky</Text>
           <Text style={styles.headerSubtitle}>
-            {activeTab === "beranda"
-              ? "Kelas / Tugas"
-              : activeTab === "catatan"
+            {activeTab === "catatan"
               ? "Catatan Pribadi"
-              : "Notifikasi"}
+              : activeTab === "notifikasi"
+              ? "Notifikasi"
+              : activeTab === "profil"
+              ? "Profil Mahasiswa"
+              : "Kelas / Tugas"}
           </Text>
         </View>
 
-        {/* Profil Avatar (untuk melihat profil, cek server & logout) */}
         <TouchableOpacity
-          style={styles.avatarBtn}
-          onPress={() => setAccountModalVisible(true)}
+          style={styles.avatarButton}
+          onPress={() => setActiveTab("profil")}
           activeOpacity={0.8}
         >
-          <View style={styles.avatarInner}>
-            <Text style={styles.avatarInitials}>{userInitial}</Text>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>
+              {(currentUser.nama || "D").charAt(0).toUpperCase()}
+            </Text>
           </View>
         </TouchableOpacity>
       </View>
 
-      {/* ==================== TAB 1: BERANDA - DAFTAR KELAS ==================== */}
-      {activeTab === "beranda" && (
+      {/* STRIP MODE OFFLINE / SINKRONISASI SESUAI FIGMA */}
+      <View style={styles.offlineStrip}>
+        <Text style={styles.offlineStripText}>
+          ⚡ Mode Offline • Perubahan akan disinkronkan saat online ⚡
+        </Text>
+      </View>
+
+      {/* KONTEN UTAMA BERDASARKAN TAB */}
+      {activeTab === "catatan" ? (
+        <CatatanComp currentUser={currentUser} activeClass={classList[0]} />
+      ) : activeTab === "notifikasi" ? (
+        <NotifikasiComp
+          currentUser={currentUser}
+          onOpenTask={(taskId: any) => {
+            const target = tasks.find((t) => String(t.id) === String(taskId));
+            if (target) {
+              setSelectedTask(target);
+              setSubView("detail-tugas");
+            }
+          }}
+        />
+      ) : activeTab === "profil" ? (
+        <ProfilComp
+          currentUser={currentUser}
+          serverStatus={serverStatus}
+          ipValue={customIpInput}
+          onChangeIp={setCustomIpInput}
+          onSaveIp={handleSaveCustomIp}
+          checking={checkingConn}
+          backendPort={BACKEND_PORT}
+          onLogout={handleLogout}
+          bottomSpace={bottomSpace}
+        />
+      ) : (
+        /* ================= TAB BERANDA / DAFTAR KELAS ================= */
         <ScrollView
-          style={styles.mainScroll}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
+          style={styles.scrollArea}
+          contentContainerStyle={{
+            padding: 16,
+            paddingBottom: bottomSpace + 30,
+          }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
+          showsVerticalScrollIndicator={false}
         >
-          {/* KARTU SAPAAN MAHASISWA */}
-          <View style={styles.greetingCard}>
-            <View style={styles.greetingTextContainer}>
-              <Text style={styles.greetingName}>Halo, {currentUser.nama}! 👋</Text>
-              <Text style={styles.greetingNim}>🪪 NIM: {currentUser.nim}</Text>
+          {loadError ? (
+            <View style={styles.errorBanner}>
+              <Text style={styles.errorText}>⚠️ {loadError}</Text>
             </View>
-            <View style={styles.greetingAvatarWrap}>
+          ) : null}
+
+          {/* GREETING CARD SESUAI FIGMA */}
+          <View style={styles.greetingCard}>
+            <View style={styles.greetingLeft}>
+              <Text style={styles.greetingTitle}>
+                Halo, {currentUser.nama}! 👋
+              </Text>
+              <View style={styles.nimRow}>
+                <Text style={styles.nimIcon}>🪪</Text>
+                <Text style={styles.nimText}>
+                  NIM : {currentUser.nim} •{" "}
+                  <Text style={styles.semesterTag}>Smt {currentUser.semester}</Text>
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.greetingAvatarBox}>
               <View style={styles.greetingAvatar}>
-                <Text style={styles.greetingAvatarText}>{userInitial}</Text>
+                <Text style={styles.greetingAvatarText}>
+                  {(currentUser.nama || "D").charAt(0).toUpperCase()}
+                </Text>
+              </View>
+              <View style={styles.cameraBadge}>
+                <Text style={styles.cameraIcon}>📸</Text>
               </View>
             </View>
           </View>
 
-          {/* DUA KARTU AKSI CEPAT (BUAT KELAS & GABUNG KELAS) */}
-          <View style={styles.actionCardsRow}>
+          {/* DUA KARTU AKSI CEPAT: [ BUAT KELAS ] & [ GABUNG KELAS ] SESUAI FIGMA */}
+          <View style={styles.quickActionRow}>
+            {/* BUAT KELAS (PJMK) */}
             <TouchableOpacity
-              style={styles.blueActionCard}
+              style={styles.actionCardPrimary}
               onPress={() => setSubView("buat-kelas")}
               activeOpacity={0.85}
             >
-              <View style={styles.actionIconCircleWhite}>
-                <Text style={styles.actionIconPlus}>⊕</Text>
+              <View style={styles.actionIconCirclePrimary}>
+                <Text style={styles.actionEmojiPrimary}>⊕</Text>
               </View>
-              <Text style={styles.blueCardTitle}>Buat Kelas</Text>
-              <Text style={styles.blueCardSub}>Khusus PJMK / Admin</Text>
+              <Text style={styles.actionCardTitlePrimary}>Buat Kelas</Text>
+              <Text style={styles.actionCardSubtitlePrimary}>
+                Khusus PJMK / Admin
+              </Text>
             </TouchableOpacity>
 
+            {/* GABUNG KELAS */}
             <TouchableOpacity
-              style={styles.lightActionCard}
+              style={styles.actionCardSecondary}
               onPress={() => setSubView("gabung-kelas")}
               activeOpacity={0.85}
             >
-              <View style={styles.actionIconCircleBlue}>
-                <Text style={styles.actionIconKey}>🔑</Text>
+              <View style={styles.actionIconCircleSecondary}>
+                <Text style={styles.actionEmojiSecondary}>🔑</Text>
               </View>
-              <Text style={styles.lightCardTitle}>Gabung Kelas</Text>
-              <Text style={styles.lightCardSub}>Pakai Kode Undangan</Text>
+              <Text style={styles.actionCardTitleSecondary}>Gabung Kelas</Text>
+              <Text style={styles.actionCardSubtitleSecondary}>
+                Pakai Kode Undangan
+              </Text>
             </TouchableOpacity>
           </View>
 
-          {/* SECTION HEADER: KELAS TERDAFTAR */}
-          <View style={styles.sectionHeaderRow}>
-            <View style={styles.sectionTitleWrap}>
-              <Text style={styles.sectionTitle}>Kelas Terdaftar</Text>
-              <View style={styles.countPill}>
-                <Text style={styles.countPillText}>{classList.length}</Text>
+          {/* RINGKASAN TUGAS & DEADLINE CEPAT (DARI FIGMA TASKY DASHBOARD) */}
+          <View style={styles.statsRow}>
+            {/* KARTU 1: TUGAS BELUM SELESAI */}
+            <View style={styles.statCardLeft}>
+              <View style={styles.statHeaderRow}>
+                <View style={styles.statIconBoxBlue}>
+                  <Text style={styles.statIconEmoji}>📄</Text>
+                </View>
+                <View style={styles.activePill}>
+                  <Text style={styles.activePillText}>Aktif!</Text>
+                </View>
               </View>
+              <Text style={styles.statCardSubtitle}>Tugas Belum Selesai</Text>
+              <Text style={styles.statCardBigNumber}>
+                {unfinishedTasks.length} <Text style={styles.statCardSmallText}>Tugas</Text>
+              </Text>
             </View>
-            <TouchableOpacity
-              onPress={() =>
-                Alert.alert(
-                  "Kelola Kelas",
-                  "Gunakan tombol di atas untuk membuat atau bergabung ke kelas baru."
-                )
-              }
-            >
-              <Text style={styles.kelolaLink}>Kelola ›</Text>
-            </TouchableOpacity>
-          </View>
 
-          {/* STATUS: MEMUAT / ERROR / KOSONG / DAFTAR KELAS */}
-          {loading ? (
-            <View style={styles.loadingWrap}>
-              <ActivityIndicator size="large" color={COLORS.primaryBlue} />
-              <Text style={styles.loadingText}>Memuat data dari server...</Text>
-            </View>
-          ) : loadError && classList.length === 0 ? (
-            <View style={styles.errorCard}>
-              <Text style={styles.errorTitle}>Gagal Memuat Data</Text>
-              <Text style={styles.errorDesc}>{loadError}</Text>
-              <TouchableOpacity style={styles.retryBtn} onPress={onRefresh}>
-                <Text style={styles.retryBtnText}>🔄 Coba Lagi</Text>
-              </TouchableOpacity>
-            </View>
-          ) : classList.length === 0 ? (
-            <View style={styles.emptyClassCard}>
-              <Text style={styles.emptyClassIcon}>🎓</Text>
-              <Text style={styles.emptyClassTitle}>
-                Belum Terdaftar di Kelas Manapun
-              </Text>
-              <Text style={styles.emptyClassDesc}>
-                Anda belum bergabung ke kelas perkuliahan. Minta Kode Kelas dari
-                PJMK Anda lalu klik tombol "Gabung Kelas" di atas, atau buat
-                kelas baru jika Anda adalah PJMK.
-              </Text>
-              <TouchableOpacity
-                style={styles.joinNowBtn}
-                onPress={() => setSubView("gabung-kelas")}
+            {/* KARTU 2: DEADLINE TERDEKAT */}
+            <View style={styles.statCardRight}>
+              <View style={styles.statHeaderRow}>
+                <View style={styles.statIconBoxOrange}>
+                  <Text style={styles.statIconEmoji}>⏰</Text>
+                </View>
+                <View style={styles.h1Pill}>
+                  <Text style={styles.h1PillText}>H-1</Text>
+                </View>
+              </View>
+              <Text style={styles.statCardSubtitle}>Deadline Terdekat</Text>
+              <Text
+                style={styles.statCardNearTask}
+                numberOfLines={1}
+                ellipsizeMode="tail"
               >
-                <Text style={styles.joinNowBtnText}>
-                  🔑 Gabung Kelas dengan Kode
-                </Text>
-              </TouchableOpacity>
+                {nearestTask ? nearestTask.subject : "Semua Selesai 🎉"}
+              </Text>
+              <Text style={styles.statCardNearTime}>
+                {nearestTask ? nearestTask.countdown || nearestTask.deadline : "Tidak ada tugas"}
+              </Text>
+            </View>
+          </View>
+
+          {/* TOMBOL FITUR TAMBAHAN: KALENDER DEADLINE & STATISTIK SAYA */}
+          <View style={styles.featurePillsRow}>
+            <TouchableOpacity
+              style={styles.featurePill}
+              onPress={() => setKalenderVisible(true)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.featurePillIcon}>📅</Text>
+              <Text style={styles.featurePillText}>Kalender Deadline</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.featurePill}
+              onPress={() => setStatistikVisible(true)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.featurePillIcon}>📊</Text>
+              <Text style={styles.featurePillText}>Statistik Saya</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* ================= SECTION KELAS TERDAFTAR ================= */}
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>
+              Kelas Terdaftar ({classList.length})
+            </Text>
+            <TouchableOpacity
+              onPress={() => {
+                if (classList.length > 0) {
+                  Alert.alert(
+                    "Kelola Kelas",
+                    "Pilih salah satu kelas di bawah untuk melihat tugas atau anggota."
+                  );
+                } else {
+                  setSubView("gabung-kelas");
+                }
+              }}
+            >
+              <Text style={styles.sectionLink}>Kelola ›</Text>
+            </TouchableOpacity>
+          </View>
+
+          {loading ? (
+            <ActivityIndicator
+              size="large"
+              color={COLORS.primaryBlue}
+              style={{ marginVertical: 24 }}
+            />
+          ) : classList.length === 0 ? (
+            /* EMPTY STATE MAHASISWA BARU (0 KELAS) SESUAI INSTRUKSI SRS & USER */
+            <View style={styles.emptyClassCard}>
+              <View style={styles.emptyIconCircle}>
+                <Text style={styles.emptyEmoji}>🎓</Text>
+              </View>
+              <Text style={styles.emptyTitle}>Belum Terdaftar di Kelas Manapun</Text>
+              <Text style={styles.emptyDesc}>
+                Sebagai mahasiswa baru, Anda belum masuk ke kelas manapun. Buat kelas baru untuk menjadi PJMK atau masukkan kode kelas dari PJMK Anda untuk bergabung.
+              </Text>
+              <View style={styles.emptyActionRow}>
+                <TouchableOpacity
+                  style={styles.emptyPrimaryBtn}
+                  onPress={() => setSubView("buat-kelas")}
+                >
+                  <Text style={styles.emptyPrimaryBtnText}>+ Buat Kelas Baru</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.emptySecondaryBtn}
+                  onPress={() => setSubView("gabung-kelas")}
+                >
+                  <Text style={styles.emptySecondaryBtnText}>Gabung Kelas</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           ) : (
-            classList.map((item, index) => {
-              const isPjmkItem = item.role?.includes("PJMK") || item.isPjmk;
-              const isPendamping = item.role?.includes("Pendamping");
-              const activeCount =
-                item.activeTasks ?? countActiveTasks(item.kelas_id);
+            /* DAFTAR KELAS PERSIS FIGMA */
+            classList.map((cls, idx) => {
+              const activeCount = countActiveTasks(cls.kelas_id);
+              const isPjmk = cls.isPjmk;
 
               return (
                 <TouchableOpacity
-                  key={item.kelas_id || item.code || index}
+                  key={String(cls.kelas_id ?? idx)}
                   style={styles.classCard}
-                  onPress={() => handleOpenClass(item)}
+                  onPress={() => handleOpenClass(cls)}
                   activeOpacity={0.9}
                 >
-                  {/* BARIS ATAS: ROLE BADGE, KODE KELAS, & TITIK TIGA */}
-                  <View style={styles.classCardTop}>
-                    <View style={styles.badgeGroup}>
-                      {isPjmkItem && !isPendamping && (
-                        <View style={styles.pjmkBadge}>
-                          <Text style={styles.pjmkBadgeText}>
-                            👑 PJMK (Admin Kelas)
-                          </Text>
-                        </View>
-                      )}
+                  {/* BARIS ATAS KARTU KELAS: BADGE PERAN & CHIP KODE */}
+                  <View style={styles.classCardTopRow}>
+                    <View
+                      style={[
+                        styles.roleBadge,
+                        isPjmk
+                          ? styles.roleBadgePjmk
+                          : cls.role?.includes("Pendamping")
+                          ? styles.roleBadgePendamping
+                          : styles.roleBadgeMhs,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.roleBadgeText,
+                          isPjmk
+                            ? styles.roleBadgeTextPjmk
+                            : cls.role?.includes("Pendamping")
+                            ? styles.roleBadgeTextPendamping
+                            : styles.roleBadgeTextMhs,
+                        ]}
+                      >
+                        {isPjmk
+                          ? "PJMK (Admin Kelas)"
+                          : cls.role || "Mahasiswa"}
+                      </Text>
+                    </View>
 
-                      {isPendamping && (
-                        <View style={styles.pendampingBadge}>
-                          <Text style={styles.pendampingBadgeText}>
-                            👥 PJMK Pendamping
-                          </Text>
-                        </View>
-                      )}
+                    {cls.code ? (
+                      <TouchableOpacity
+                        style={styles.codeChip}
+                        onPress={() => handleCopyClassCode(cls.code)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Text style={styles.codeChipText}>
+                          🔑 {cls.code}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
 
-                      {!isPjmkItem && !isPendamping && (
-                        <View style={styles.mhsBadge}>
-                          <Text style={styles.mhsBadgeText}>🎓 Mahasiswa</Text>
-                        </View>
-                      )}
+                    <TouchableOpacity
+                      style={styles.menuDots}
+                      onPress={() => handleOpenClass(cls)}
+                    >
+                      <Text style={styles.menuDotsText}>⋮</Text>
+                    </TouchableOpacity>
+                  </View>
 
-                      {item.urgent && (
-                        <View style={styles.urgentBadge}>
-                          <Text style={styles.urgentBadgeText}>
-                            🔥 {item.urgentText || "Mendesak"}
-                          </Text>
-                        </View>
-                      )}
+                  {/* NAMA KELAS & FAKULTAS/RUANGAN */}
+                  <Text style={styles.className}>{cls.name || "Kelas Tanpa Nama"}</Text>
+                  <Text style={styles.classRoom}>
+                    {cls.room || "Fakultas MIPA • Universitas Udayana"}
+                  </Text>
 
-                      <View style={styles.codeBadge}>
-                        <Text style={styles.codeBadgeText}>
-                          {item.code || item.kode_kelas}
+                  {/* FOOTER KARTU KELAS */}
+                  <View style={styles.classCardFooter}>
+                    <View style={styles.classMetaRow}>
+                      <Text style={styles.matkulMeta}>
+                        📘 {cls.matkulCount} Matkul
+                      </Text>
+                      <View
+                        style={[
+                          styles.activeTaskBadge,
+                          activeCount > 0 && styles.activeTaskBadgeHighlight,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.activeTaskText,
+                            activeCount > 0 && styles.activeTaskTextHighlight,
+                          ]}
+                        >
+                          ⚡ {activeCount} Tugas Aktif
                         </Text>
                       </View>
                     </View>
 
-                    <Text style={styles.moreIcon}>⋮</Text>
-                  </View>
-
-                  {/* NAMA KELAS & RUANGAN */}
-                  <Text style={styles.classCardTitle}>
-                    {item.name || item.nama_kelas}
-                  </Text>
-                  {item.room ? (
-                    <Text style={styles.classCardSubtitle}>{item.room}</Text>
-                  ) : (
-                    <View style={{ height: 14 }} />
-                  )}
-
-                  {/* FOOTER KELAS: MATKUL, TUGAS AKTIF, ANGGOTA, BUKA */}
-                  <View style={styles.classCardFooter}>
-                    <View style={styles.footerInfoRow}>
-                      {item.matkulCount ? (
-                        <Text style={styles.footerItemText}>
-                          📚 {item.matkulCount} Matkul
-                        </Text>
-                      ) : null}
-
-                      <Text style={styles.footerItemText}>
-                        ⏰ {activeCount} Tugas Aktif
-                      </Text>
-
-                      {item.members ? (
-                        <Text style={styles.footerItemText}>
-                          👥 {item.members} Mhs
-                        </Text>
-                      ) : null}
+                    <View style={styles.openLinkBox}>
+                      <Text style={styles.openLinkText}>Buka →</Text>
                     </View>
-
-                    <Text style={styles.bukaLink}>Buka ➔</Text>
                   </View>
                 </TouchableOpacity>
               );
             })
           )}
 
-          <View style={{ height: 40 }} />
+          {/* ================= SECTION TUGAS MENDATANG ================= */}
+          <View style={[styles.sectionHeaderRow, { marginTop: 22 }]}>
+            <Text style={styles.sectionTitle}>Tugas Mendatang</Text>
+            <Text style={styles.sortSubtitle}>Urut Deadline</Text>
+          </View>
+
+          {/* TABS FILTER TUGAS: [ SEMUA ] | [ BELUM DIKERJAKAN ] | [ SELESAI ] */}
+          <View style={styles.taskFilterRow}>
+            <TouchableOpacity
+              style={[
+                styles.taskFilterPill,
+                taskFilter === "semua" && styles.taskFilterPillActive,
+              ]}
+              onPress={() => setTaskFilter("semua")}
+            >
+              <Text
+                style={[
+                  styles.taskFilterPillText,
+                  taskFilter === "semua" && styles.taskFilterPillTextActive,
+                ]}
+              >
+                Semua ({tasks.length})
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.taskFilterPill,
+                taskFilter === "belum" && styles.taskFilterPillActive,
+              ]}
+              onPress={() => setTaskFilter("belum")}
+            >
+              <Text
+                style={[
+                  styles.taskFilterPillText,
+                  taskFilter === "belum" && styles.taskFilterPillTextActive,
+                ]}
+              >
+                Belum Dikerjakan ({unfinishedTasks.length})
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.taskFilterPill,
+                taskFilter === "selesai" && styles.taskFilterPillActive,
+              ]}
+              onPress={() => setTaskFilter("selesai")}
+            >
+              <Text
+                style={[
+                  styles.taskFilterPillText,
+                  taskFilter === "selesai" && styles.taskFilterPillTextActive,
+                ]}
+              >
+                Selesai ({finishedTasks.length})
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* DAFTAR TUGAS SESUAI DESAIN FIGMA */}
+          {displayedTasks.length === 0 ? (
+            <View style={styles.emptyTaskCard}>
+              <Text style={styles.emptyTaskTitle}>
+                {taskFilter === "selesai"
+                  ? "Belum ada tugas selesai"
+                  : taskFilter === "belum"
+                  ? "Semua tugas telah diselesaikan! 🎉"
+                  : "Belum ada tugas di kelas Anda"}
+              </Text>
+            </View>
+          ) : (
+            displayedTasks.map((t, idx) => {
+              const isFinished = t.status === "Selesai";
+              return (
+                <TouchableOpacity
+                  key={String(t.id ?? idx)}
+                  style={[
+                    styles.taskCard,
+                    isFinished && styles.taskCardFinished,
+                  ]}
+                  onPress={() => {
+                    setSelectedTask(t);
+                    setSubView("detail-tugas");
+                  }}
+                  activeOpacity={0.9}
+                >
+                  {/* BARIS HEADER TUGAS: COUNTDOWN & BADGE MATA KULIAH */}
+                  <View style={styles.taskCardTopRow}>
+                    <View
+                      style={[
+                        styles.taskCountdownPill,
+                        isFinished && styles.taskCountdownPillFinished,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.taskCountdownText,
+                          isFinished && styles.taskCountdownTextFinished,
+                        ]}
+                      >
+                        {isFinished
+                          ? "✓ Selesai"
+                          : `🏆 ${t.countdown || t.deadline}`}
+                      </Text>
+                    </View>
+
+                    <View style={styles.taskSubjectPill}>
+                      <Text style={styles.taskSubjectPillText}>
+                        {t.subject}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* JUDUL TUGAS & CHECKBOX STATUS */}
+                  <View style={styles.taskTitleRow}>
+                    <Text
+                      style={[
+                        styles.taskTitleText,
+                        isFinished && styles.taskTitleTextFinished,
+                      ]}
+                      numberOfLines={2}
+                    >
+                      {t.title}
+                    </Text>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.checkboxBox,
+                        isFinished && styles.checkboxBoxChecked,
+                      ]}
+                      onPress={() =>
+                        handleToggleTaskStatus(
+                          t.id,
+                          isFinished ? "Belum Dikerjakan" : "Selesai"
+                        )
+                      }
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      {isFinished ? (
+                        <Text style={styles.checkboxCheck}>✓</Text>
+                      ) : null}
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* INFO PEMBUAT & TIPE */}
+                  <Text style={styles.taskCreatorText}>
+                    👤 {t.creator} • Tugas Individu
+                  </Text>
+
+                  {/* FOOTER TUGAS: STATUS BADGE & FORMAT */}
+                  <View style={styles.taskFooterRow}>
+                    <View
+                      style={[
+                        styles.taskStatusPill,
+                        isFinished
+                          ? styles.taskStatusPillSuccess
+                          : styles.taskStatusPillPending,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.taskStatusPillText,
+                          isFinished
+                            ? styles.taskStatusPillTextSuccess
+                            : styles.taskStatusPillTextPending,
+                        ]}
+                      >
+                        {t.status}
+                      </Text>
+                    </View>
+
+                    <Text style={styles.taskFileFormatText}>
+                      📄 PDF / Dokumen
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          )}
+
+          {/* BANNER SINKRONISASI OTOMATIS DI BAGIAN BAWAH SESUAI FIGMA */}
+          <View style={styles.bottomSyncCard}>
+            <View style={styles.bottomSyncIconBox}>
+              <Text style={styles.bottomSyncEmoji}>🔄</Text>
+            </View>
+            <View style={styles.bottomSyncContent}>
+              <Text style={styles.bottomSyncTitle}>Sinkronisasi Otomatis</Text>
+              <Text style={styles.bottomSyncDesc}>
+                Data lokal Anda aman. Begitu jaringan pulih, tugas & progres tersimpan ke server.
+              </Text>
+            </View>
+          </View>
         </ScrollView>
       )}
 
-      {/* ==================== TAB 2: CATATAN PRIBADI ==================== */}
-      {activeTab === "catatan" && (
-        <View style={{ flex: 1, paddingHorizontal: 16, paddingTop: 10 }}>
-          <CatatanComp
-            currentUser={currentUser}
-            activeClass={selectedClass || classList[0]}
-          />
-        </View>
-      )}
-
-      {/* ==================== TAB 3: NOTIFIKASI ==================== */}
-      {activeTab === "notifikasi" && (
-        <View style={{ flex: 1, paddingHorizontal: 16, paddingTop: 10 }}>
-          <NotifikasiComp
-            currentUser={currentUser}
-            onPengingatChanged={jadwalkanPengingat}
-            onOpenTask={() => {
-              if (tasks.length > 0) {
-                setSelectedTask(tasks[0]);
-                setSubView("detail-tugas");
-              }
-            }}
-          />
-        </View>
-      )}
-
-      {/* ==================== 3 BOTTOM TABS ==================== */}
-      <View style={styles.bottomTabBar}>
-        {/* Tab 1: Kelas / Tugas */}
-        <TouchableOpacity
-          style={styles.tabItem}
-          onPress={() => setActiveTab("beranda")}
-          activeOpacity={0.8}
-        >
-          <Text
-            style={[
-              styles.tabIcon,
-              activeTab === "beranda" && styles.tabIconActive,
-            ]}
-          >
-            📋
-          </Text>
-          <Text
-            style={[
-              styles.tabLabel,
-              activeTab === "beranda" && styles.tabLabelActive,
-            ]}
-          >
-            Kelas / Tugas
-          </Text>
-        </TouchableOpacity>
-
-        {/* Tab 2: Catatan */}
-        <TouchableOpacity
-          style={styles.tabItem}
-          onPress={() => setActiveTab("catatan")}
-          activeOpacity={0.8}
-        >
-          <Text
-            style={[
-              styles.tabIcon,
-              activeTab === "catatan" && styles.tabIconActive,
-            ]}
-          >
-            📝
-          </Text>
-          <Text
-            style={[
-              styles.tabLabel,
-              activeTab === "catatan" && styles.tabLabelActive,
-            ]}
-          >
-            Catatan
-          </Text>
-        </TouchableOpacity>
-
-        {/* Tab 3: Notifikasi */}
-        <TouchableOpacity
-          style={styles.tabItem}
-          onPress={() => setActiveTab("notifikasi")}
-          activeOpacity={0.8}
-        >
-          <View>
-            <Text
-              style={[
-                styles.tabIcon,
-                activeTab === "notifikasi" && styles.tabIconActive,
-              ]}
-            >
-              🔔
-            </Text>
-            <View style={styles.redDot} />
+      {/* FLOATING ACTION BUTTON (FAB) KHUSUS PJMK SESUAI FIGMA */}
+      {activeTab === "beranda" && !subView && isPjmkAnyClass ? (
+        <View style={[styles.fabContainer, { bottom: bottomSpace + 12 }]}>
+          <View style={styles.fabPjmkBadge}>
+            <Text style={styles.fabPjmkBadgeText}>Khusus PJMK</Text>
           </View>
-          <Text
-            style={[
-              styles.tabLabel,
-              activeTab === "notifikasi" && styles.tabLabelActive,
-            ]}
+          <TouchableOpacity
+            style={styles.fabBtn}
+            onPress={() => {
+              setEditingTask(null);
+              setSubView("form-tugas");
+            }}
+            activeOpacity={0.85}
           >
-            Notifikasi
-          </Text>
-        </TouchableOpacity>
+            <Text style={styles.fabBtnIcon}>+</Text>
+            <Text style={styles.fabBtnText}>Tambah Tugas</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {/* BOTTOM NAVIGATION SESUAI FIGMA DENGAN INDIKATOR NOTIFIKASI */}
+      <View
+        style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 8) }]}
+      >
+        {TABS.map((item) => {
+          const isActive = activeTab === item.key;
+          return (
+            <TouchableOpacity
+              key={item.key}
+              style={styles.navItem}
+              onPress={() => {
+                setSubView(null);
+                setActiveTab(item.key);
+              }}
+              activeOpacity={0.7}
+            >
+              <View style={styles.navIconBox}>
+                <Text style={styles.navIconEmoji}>{item.icon}</Text>
+                {item.key === "notifikasi" && unreadNotifCount > 0 ? (
+                  <View style={styles.notifBadge}>
+                    <Text style={styles.notifBadgeText}>
+                      {unreadNotifCount > 9 ? "9+" : unreadNotifCount}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+              <Text
+                style={[
+                  styles.navText,
+                  isActive && styles.navTextActive,
+                ]}
+              >
+                {item.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
-      {/* ========================================================================= */}
-      {/* MODAL PROFIL, KONEKSI BACKEND & LOGOUT                                    */}
-      {/* ========================================================================= */}
+      {/* MODAL KALENDER DEADLINE SESUAI FIGMA */}
       <Modal
-        visible={accountModalVisible}
-        transparent
+        visible={kalenderVisible}
+        transparent={true}
         animationType="slide"
-        onRequestClose={() => setAccountModalVisible(false)}
+        onRequestClose={() => setKalenderVisible(false)}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
-            <View style={styles.modalDragHandle} />
-
-            <View style={styles.modalHeaderRow}>
-              <Text style={styles.modalSheetTitle}>Profil & Pengaturan Akun</Text>
-              <TouchableOpacity onPress={() => setAccountModalVisible(false)}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>📅 Kalender Deadline</Text>
+              <TouchableOpacity onPress={() => setKalenderVisible(false)}>
                 <Text style={styles.modalCloseText}>✕</Text>
               </TouchableOpacity>
             </View>
 
-            {/* Info Akun Aktif */}
-            <View style={styles.userProfileCard}>
-              <View style={styles.profileAvatarLarge}>
-                <Text style={styles.profileAvatarText}>{userInitial}</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.profileNameLarge}>{currentUser.nama}</Text>
-                <Text style={styles.profileSubLarge}>
-                  {currentUser.nim} • {currentUser.email}
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.calendarSubtitle}>
+                Daftar tenggat waktu tugas kuliah bulan ini:
+              </Text>
+
+              {tasks.length === 0 ? (
+                <Text style={styles.calendarEmptyText}>
+                  Belum ada tugas dengan tenggat waktu.
                 </Text>
-                <View style={styles.profileRolePill}>
-                  <Text style={styles.profileRolePillText}>
-                    {currentUser.role}
-                  </Text>
+              ) : (
+                tasks.map((t, idx) => (
+                  <View key={String(t.id ?? idx)} style={styles.calendarItem}>
+                    <View style={styles.calendarDateBox}>
+                      <Text style={styles.calendarDateText}>
+                        {t.deadline ? t.deadline.split(",")[0] : `Tugas ${idx + 1}`}
+                      </Text>
+                    </View>
+                    <View style={styles.calendarItemInfo}>
+                      <Text style={styles.calendarItemTitle}>{t.title}</Text>
+                      <Text style={styles.calendarItemSubject}>{t.subject}</Text>
+                      <Text style={styles.calendarItemCountdown}>
+                        ⏰ {t.countdown || t.deadline}
+                      </Text>
+                    </View>
+                  </View>
+                ))
+              )}
+
+              <TouchableOpacity
+                style={styles.modalCloseBtn}
+                onPress={() => setKalenderVisible(false)}
+              >
+                <Text style={styles.modalCloseBtnText}>Tutup Kalender</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL STATISTIK SAYA SESUAI FIGMA */}
+      <Modal
+        visible={statistikVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setStatistikVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>📊 Statistik Akademik</Text>
+              <TouchableOpacity onPress={() => setStatistikVisible(false)}>
+                <Text style={styles.modalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View style={styles.statModalCard}>
+                <Text style={styles.statModalLabel}>Tingkat Penyelesaian Tugas</Text>
+                <Text style={styles.statModalPercentage}>
+                  {tasks.length > 0
+                    ? Math.round((finishedTasks.length / tasks.length) * 100)
+                    : 0}
+                  %
+                </Text>
+                <View style={styles.progressBarBg}>
+                  <View
+                    style={[
+                      styles.progressBarFill,
+                      {
+                        width: `${
+                          tasks.length > 0
+                            ? Math.round((finishedTasks.length / tasks.length) * 100)
+                            : 0
+                        }%`,
+                      },
+                    ]}
+                  />
                 </View>
               </View>
-            </View>
 
-            {/* KONEKSI SERVER (EXPO GO / WEB / LAN) */}
-            <Text style={styles.sheetSectionTitle}>Koneksi Server Backend:</Text>
-            <View style={styles.serverCard}>
-              <Text style={styles.serverStatusLabel}>Status Backend:</Text>
-              <Text style={styles.serverStatusValue}>{serverStatus}</Text>
+              <View style={styles.statNumbersRow}>
+                <View style={styles.statNumberBox}>
+                  <Text style={styles.statNumberVal}>{classList.length}</Text>
+                  <Text style={styles.statNumberSub}>Kelas Diikuti</Text>
+                </View>
 
-              <Text style={styles.ipHelpText}>
-                Hubungkan HP Android/iOS (Expo Go) ke Wi-Fi yang sama:
-              </Text>
-              <View style={styles.ipInputRow}>
-                <TextInput
-                  style={styles.ipInput}
-                  value={customIpInput}
-                  onChangeText={setCustomIpInput}
-                  placeholder="IP Komputer (misal 192.168.100.81)"
-                />
-                <TouchableOpacity
-                  style={styles.ipSaveBtn}
-                  onPress={handleSaveCustomIp}
-                  disabled={checkingConn}
-                >
-                  {checkingConn ? (
-                    <ActivityIndicator color="#FFFFFF" size="small" />
-                  ) : (
-                    <Text style={styles.ipSaveText}>Tes & Simpan</Text>
-                  )}
-                </TouchableOpacity>
+                <View style={styles.statNumberBox}>
+                  <Text style={styles.statNumberVal}>{unfinishedTasks.length}</Text>
+                  <Text style={styles.statNumberSub}>Belum Selesai</Text>
+                </View>
+
+                <View style={styles.statNumberBox}>
+                  <Text style={styles.statNumberVal}>{finishedTasks.length}</Text>
+                  <Text style={styles.statNumberSub}>Tugas Selesai</Text>
+                </View>
               </View>
-            </View>
 
-            {/* TOMBOL LOGOUT */}
-            <TouchableOpacity
-              style={styles.logoutBtn}
-              onPress={() => {
-                setAccountModalVisible(false);
-                router.replace("/");
-              }}
-            >
-              <Text style={styles.logoutBtnText}>🚪 Keluar Akun (Logout)</Text>
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalCloseBtn}
+                onPress={() => setStatistikVisible(false)}
+              >
+                <Text style={styles.modalCloseBtnText}>Tutup Statistik</Text>
+              </TouchableOpacity>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -908,62 +1326,79 @@ export default function Dashboard() {
   );
 }
 
-// =========================================================================
-// STYLESHEET
-// =========================================================================
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: COLORS.background,
   },
   topHeader: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8,
+    backgroundColor: COLORS.cardBg,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: COLORS.background,
   },
-  headerLeft: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    gap: 8,
+  headerBrandBox: {
+    flexDirection: "column",
   },
   appBrand: {
     fontSize: 22,
     fontWeight: "900",
     color: COLORS.primaryBlue,
+    letterSpacing: -0.5,
   },
   headerSubtitle: {
-    fontSize: 13,
-    color: COLORS.subText,
+    fontSize: 12,
     fontWeight: "600",
+    color: COLORS.subText,
+    marginTop: 1,
   },
-  avatarBtn: {
+  avatarButton: {
     padding: 2,
   },
-  avatarInner: {
+  avatar: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: "#DCEBF8",
+    backgroundColor: COLORS.lightBlueBg,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#BADBFC",
+    borderWidth: 1.5,
+    borderColor: "#BAE0FD",
   },
-  avatarInitials: {
-    fontSize: 16,
+  avatarText: {
+    fontSize: 15,
     fontWeight: "800",
     color: COLORS.primaryBlue,
   },
-  mainScroll: {
+  offlineStrip: {
+    backgroundColor: COLORS.warningBg,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  offlineStripText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.warningText,
+  },
+  scrollArea: {
     flex: 1,
   },
-  scrollContent: {
-    paddingHorizontal: 18,
-    paddingTop: 14,
+  errorBanner: {
+    backgroundColor: COLORS.urgentBadge,
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 14,
+  },
+  errorText: {
+    color: COLORS.urgentText,
+    fontSize: 13,
+    fontWeight: "600",
   },
   greetingCard: {
     backgroundColor: COLORS.cardBg,
@@ -974,543 +1409,903 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     borderWidth: 1,
     borderColor: COLORS.border,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 2,
-    marginBottom: 16,
-  },
-  greetingTextContainer: {
-    flex: 1,
-  },
-  greetingName: {
-    fontSize: 20,
-    fontWeight: "900",
-    color: COLORS.navyText,
-  },
-  greetingNim: {
-    fontSize: 12,
-    color: COLORS.subText,
-    marginTop: 4,
-    fontWeight: "600",
-  },
-  greetingAvatarWrap: {
-    marginLeft: 12,
-  },
-  greetingAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "#0B4A9E",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  greetingAvatarText: {
-    color: "#FFFFFF",
-    fontSize: 18,
-    fontWeight: "800",
-  },
-  actionCardsRow: {
-    flexDirection: "row",
-    gap: 12,
-    marginBottom: 20,
-  },
-  blueActionCard: {
-    flex: 1,
-    backgroundColor: "#0A3F88",
-    borderRadius: 18,
-    padding: 16,
-    minHeight: 125,
-    justifyContent: "center",
-    shadowColor: "#0A3F88",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  actionIconCircleWhite: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: "#FFFFFF",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 10,
-  },
-  actionIconPlus: {
-    fontSize: 20,
-    color: "#0A3F88",
-    fontWeight: "900",
-  },
-  blueCardTitle: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: "#FFFFFF",
-  },
-  blueCardSub: {
-    fontSize: 11,
-    color: "#CFE2FE",
-    marginTop: 2,
-    fontWeight: "500",
-  },
-  lightActionCard: {
-    flex: 1,
-    backgroundColor: "#DDECF8",
-    borderRadius: 18,
-    padding: 16,
-    minHeight: 125,
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#C5DCF4",
-  },
-  actionIconCircleBlue: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: "#0A3F88",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 10,
-  },
-  actionIconKey: {
-    fontSize: 15,
-  },
-  lightCardTitle: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: "#0A3F88",
-  },
-  lightCardSub: {
-    fontSize: 11,
-    color: "#475569",
-    marginTop: 2,
-    fontWeight: "500",
-  },
-  sectionHeaderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 12,
-  },
-  sectionTitleWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: "800",
-    color: COLORS.navyText,
-  },
-  countPill: {
-    backgroundColor: "#D9ECFF",
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
-  },
-  countPillText: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: "#0B4A9E",
-  },
-  kelolaLink: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#0B4A9E",
-  },
-  loadingWrap: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 36,
-    gap: 10,
-  },
-  loadingText: {
-    fontSize: 12,
-    color: COLORS.subText,
-    fontWeight: "600",
-  },
-  errorCard: {
-    backgroundColor: "#FEF2F2",
-    borderRadius: 18,
-    padding: 20,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#FECACA",
-    marginBottom: 16,
-  },
-  errorTitle: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: "#B91C1C",
-  },
-  errorDesc: {
-    fontSize: 12,
-    color: "#7F1D1D",
-    textAlign: "center",
-    lineHeight: 18,
-    marginTop: 6,
     marginBottom: 14,
-  },
-  retryBtn: {
-    backgroundColor: "#0A3F88",
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
-  },
-  retryBtnText: {
-    color: "#FFFFFF",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  emptyClassCard: {
-    backgroundColor: COLORS.cardBg,
-    borderRadius: 18,
-    padding: 24,
-    alignItems: "center",
-    borderWidth: 1.5,
-    borderColor: "#E2E8F0",
-    borderStyle: "dashed",
-    marginBottom: 16,
-  },
-  emptyClassIcon: {
-    fontSize: 42,
-    marginBottom: 8,
-  },
-  emptyClassTitle: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: COLORS.navyText,
-    textAlign: "center",
-  },
-  emptyClassDesc: {
-    fontSize: 12,
-    color: COLORS.subText,
-    textAlign: "center",
-    lineHeight: 18,
-    marginTop: 6,
-    marginBottom: 16,
-  },
-  joinNowBtn: {
-    backgroundColor: "#0A3F88",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 22,
-  },
-  joinNowBtnText: {
-    color: "#FFFFFF",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  classCard: {
-    backgroundColor: COLORS.cardBg,
-    borderRadius: 18,
-    padding: 16,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
-    shadowRadius: 6,
+    shadowRadius: 3,
     elevation: 2,
   },
-  classCardTop: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 8,
+  greetingLeft: {
+    flex: 1,
   },
-  badgeGroup: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
-    gap: 6,
-  },
-  pjmkBadge: {
-    backgroundColor: "#0B4A9E",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-  },
-  pjmkBadgeText: {
-    color: "#FFFFFF",
-    fontSize: 10,
-    fontWeight: "800",
-  },
-  pendampingBadge: {
-    backgroundColor: "#F3E8FF",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-  },
-  pendampingBadgeText: {
-    color: "#7E22CE",
-    fontSize: 10,
-    fontWeight: "800",
-  },
-  mhsBadge: {
-    backgroundColor: "#E2E8F0",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-  },
-  mhsBadgeText: {
-    color: "#334155",
-    fontSize: 10,
-    fontWeight: "800",
-  },
-  urgentBadge: {
-    backgroundColor: "#FEE2E2",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-  },
-  urgentBadgeText: {
-    color: "#DC2626",
-    fontSize: 10,
-    fontWeight: "800",
-  },
-  codeBadge: {
-    backgroundColor: "#F1F5F9",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-  },
-  codeBadgeText: {
-    color: "#475569",
-    fontSize: 10,
-    fontWeight: "700",
-  },
-  moreIcon: {
-    fontSize: 18,
-    color: "#94A3B8",
+  greetingTitle: {
+    fontSize: 20,
     fontWeight: "900",
-  },
-  classCardTitle: {
-    fontSize: 16,
-    fontWeight: "800",
     color: COLORS.navyText,
     marginBottom: 4,
   },
-  classCardSubtitle: {
+  nimRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  nimIcon: {
+    fontSize: 13,
+    marginRight: 4,
+  },
+  nimText: {
     fontSize: 12,
     color: COLORS.subText,
+    fontWeight: "600",
+  },
+  semesterTag: {
+    color: COLORS.primaryBlue,
+    fontWeight: "800",
+  },
+  greetingAvatarBox: {
+    position: "relative",
+  },
+  greetingAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: "#E0EFFE",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#BAE0FD",
+  },
+  greetingAvatarText: {
+    fontSize: 20,
+    fontWeight: "900",
+    color: COLORS.primaryBlue,
+  },
+  cameraBadge: {
+    position: "absolute",
+    bottom: -2,
+    right: -2,
+    backgroundColor: COLORS.cardBg,
+    borderRadius: 10,
+    padding: 2,
+    elevation: 2,
+  },
+  cameraIcon: {
+    fontSize: 11,
+  },
+  quickActionRow: {
+    flexDirection: "row",
+    gap: 12,
     marginBottom: 14,
+  },
+  actionCardPrimary: {
+    flex: 1,
+    backgroundColor: COLORS.primaryBlue,
+    borderRadius: 16,
+    padding: 14,
+    alignItems: "flex-start",
+    shadowColor: COLORS.primaryBlue,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  actionIconCirclePrimary: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+  actionEmojiPrimary: {
+    fontSize: 16,
+    color: "#FFFFFF",
+    fontWeight: "bold",
+  },
+  actionCardTitlePrimary: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#FFFFFF",
+    marginBottom: 2,
+  },
+  actionCardSubtitlePrimary: {
+    fontSize: 11,
+    color: "rgba(255, 255, 255, 0.8)",
+  },
+  actionCardSecondary: {
+    flex: 1,
+    backgroundColor: COLORS.lightBlueBg,
+    borderRadius: 16,
+    padding: 14,
+    alignItems: "flex-start",
+    borderWidth: 1,
+    borderColor: "#BAE0FD",
+  },
+  actionIconCircleSecondary: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#DBEAFE",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+  actionEmojiSecondary: {
+    fontSize: 14,
+  },
+  actionCardTitleSecondary: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: COLORS.navyText,
+    marginBottom: 2,
+  },
+  actionCardSubtitleSecondary: {
+    fontSize: 11,
+    color: COLORS.subText,
+  },
+  statsRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 14,
+  },
+  statCardLeft: {
+    flex: 1,
+    backgroundColor: COLORS.lightBlueCard,
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#DBEAFE",
+  },
+  statCardRight: {
+    flex: 1,
+    backgroundColor: "#FEF7EE",
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#FED7AA",
+  },
+  statHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  statIconBoxBlue: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: "#DBEAFE",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  statIconBoxOrange: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: "#FED7AA",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  statIconEmoji: {
+    fontSize: 13,
+  },
+  activePill: {
+    backgroundColor: COLORS.primaryBlue,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  activePillText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#FFFFFF",
+  },
+  h1Pill: {
+    backgroundColor: "#F97316",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  h1PillText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#FFFFFF",
+  },
+  statCardSubtitle: {
+    fontSize: 11,
+    color: COLORS.subText,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  statCardBigNumber: {
+    fontSize: 18,
+    fontWeight: "900",
+    color: COLORS.navyText,
+  },
+  statCardSmallText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: COLORS.subText,
+  },
+  statCardNearTask: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: COLORS.navyText,
+  },
+  statCardNearTime: {
+    fontSize: 10,
+    color: COLORS.urgentText,
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  featurePillsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 18,
+  },
+  featurePill: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.cardBg,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  featurePillIcon: {
+    fontSize: 13,
+    marginRight: 6,
+  },
+  featurePillText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: COLORS.navyText,
+  },
+  sectionHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: COLORS.navyText,
+  },
+  sectionLink: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: COLORS.primaryBlue,
+  },
+  emptyClassCard: {
+    backgroundColor: COLORS.cardBg,
+    borderRadius: 16,
+    padding: 20,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  emptyIconCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: COLORS.lightBlueCard,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
+  emptyEmoji: {
+    fontSize: 28,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: COLORS.navyText,
+    marginBottom: 6,
+    textAlign: "center",
+  },
+  emptyDesc: {
+    fontSize: 12,
+    color: COLORS.subText,
+    lineHeight: 18,
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  emptyActionRow: {
+    flexDirection: "row",
+    gap: 10,
+    width: "100%",
+  },
+  emptyPrimaryBtn: {
+    flex: 1,
+    backgroundColor: COLORS.primaryBlue,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  emptyPrimaryBtnText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  emptySecondaryBtn: {
+    flex: 1,
+    backgroundColor: COLORS.lightBlueCard,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  emptySecondaryBtnText: {
+    color: COLORS.primaryBlue,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  classCard: {
+    backgroundColor: COLORS.cardBg,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  classCardTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  roleBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  roleBadgePjmk: {
+    backgroundColor: COLORS.primaryBlue,
+  },
+  roleBadgePendamping: {
+    backgroundColor: COLORS.purpleBg,
+  },
+  roleBadgeMhs: {
+    backgroundColor: "#F1F5F9",
+  },
+  roleBadgeText: {
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  roleBadgeTextPjmk: {
+    color: "#FFFFFF",
+  },
+  roleBadgeTextPendamping: {
+    color: COLORS.purpleText,
+  },
+  roleBadgeTextMhs: {
+    color: "#334155",
+  },
+  codeChip: {
+    backgroundColor: "#F1F5F9",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  codeChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.navyText,
+  },
+  menuDots: {
+    marginLeft: "auto",
+    paddingHorizontal: 8,
+  },
+  menuDotsText: {
+    fontSize: 16,
+    color: COLORS.subText,
+    fontWeight: "bold",
+  },
+  className: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: COLORS.navyText,
+    marginBottom: 2,
+  },
+  classRoom: {
+    fontSize: 12,
+    color: COLORS.subText,
+    marginBottom: 12,
   },
   classCardFooter: {
     flexDirection: "row",
-    alignItems: "center",
     justifyContent: "space-between",
+    alignItems: "center",
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+  },
+  classMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  matkulMeta: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: COLORS.navyText,
+  },
+  activeTaskBadge: {
+    backgroundColor: "#F1F5F9",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  activeTaskBadgeHighlight: {
+    backgroundColor: "#EFF6FF",
+  },
+  activeTaskText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.subText,
+  },
+  activeTaskTextHighlight: {
+    color: COLORS.primaryBlue,
+  },
+  openLinkBox: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  openLinkText: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: COLORS.primaryBlue,
+  },
+  sortSubtitle: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: COLORS.subText,
+  },
+  taskFilterRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 12,
+  },
+  taskFilterPill: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    backgroundColor: COLORS.cardBg,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  taskFilterPillActive: {
+    backgroundColor: COLORS.primaryBlue,
+    borderColor: COLORS.primaryBlue,
+  },
+  taskFilterPillText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.subText,
+  },
+  taskFilterPillTextActive: {
+    color: "#FFFFFF",
+  },
+  emptyTaskCard: {
+    backgroundColor: COLORS.cardBg,
+    borderRadius: 14,
+    padding: 18,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  emptyTaskTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: COLORS.subText,
+  },
+  taskCard: {
+    backgroundColor: COLORS.cardBg,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: 10,
+    borderLeftWidth: 4,
+    borderLeftColor: COLORS.primaryBlue,
+  },
+  taskCardFinished: {
+    borderLeftColor: COLORS.successText,
+    opacity: 0.85,
+  },
+  taskCardTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  taskCountdownPill: {
+    backgroundColor: "#FEF2F2",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  taskCountdownPillFinished: {
+    backgroundColor: COLORS.successBg,
+  },
+  taskCountdownText: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: COLORS.urgentText,
+  },
+  taskCountdownTextFinished: {
+    color: COLORS.successText,
+  },
+  taskSubjectPill: {
+    backgroundColor: COLORS.lightBlueCard,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  taskSubjectPillText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.primaryBlue,
+  },
+  taskTitleRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  taskTitleText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: "800",
+    color: COLORS.navyText,
+    marginRight: 10,
+  },
+  taskTitleTextFinished: {
+    textDecorationLine: "line-through",
+    color: COLORS.subText,
+  },
+  checkboxBox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: "#CBD5E1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  checkboxBoxChecked: {
+    backgroundColor: COLORS.primaryBlue,
+    borderColor: COLORS.primaryBlue,
+  },
+  checkboxCheck: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "bold",
+  },
+  taskCreatorText: {
+    fontSize: 11,
+    color: COLORS.subText,
+    marginBottom: 10,
+  },
+  taskFooterRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: "#F1F5F9",
-    paddingTop: 10,
   },
-  footerInfoRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
+  taskStatusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
   },
-  footerItemText: {
+  taskStatusPillPending: {
+    backgroundColor: "#F1F5F9",
+  },
+  taskStatusPillSuccess: {
+    backgroundColor: COLORS.successBg,
+  },
+  taskStatusPillText: {
     fontSize: 11,
-    fontWeight: "600",
-    color: "#475569",
-  },
-  bukaLink: {
-    fontSize: 12,
-    fontWeight: "800",
-    color: "#0B4A9E",
-  },
-  bottomTabBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-around",
-    backgroundColor: "#FFFFFF",
-    borderTopWidth: 1,
-    borderTopColor: "#E2E8F0",
-    paddingVertical: 10,
-  },
-  tabItem: {
-    alignItems: "center",
-    justifyContent: "center",
-    flex: 1,
-  },
-  tabIcon: {
-    fontSize: 20,
-    color: "#94A3B8",
-  },
-  tabIconActive: {
-    color: "#0B4A9E",
-  },
-  tabLabel: {
-    fontSize: 10,
-    fontWeight: "600",
-    color: "#94A3B8",
-    marginTop: 2,
-  },
-  tabLabelActive: {
-    color: "#0B4A9E",
-    fontWeight: "800",
-  },
-  redDot: {
-    position: "absolute",
-    top: -2,
-    right: -4,
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: "#EF4444",
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "flex-end",
-  },
-  modalSheet: {
-    backgroundColor: "#FFFFFF",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 22,
-    maxHeight: "85%",
-  },
-  modalDragHandle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "#CBD5E1",
-    alignSelf: "center",
-    marginBottom: 14,
-  },
-  modalHeaderRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  modalSheetTitle: {
-    fontSize: 18,
-    fontWeight: "800",
-    color: COLORS.navyText,
-  },
-  modalCloseText: {
-    fontSize: 18,
     fontWeight: "700",
-    color: "#64748B",
   },
-  userProfileCard: {
+  taskStatusPillTextPending: {
+    color: COLORS.subText,
+  },
+  taskStatusPillTextSuccess: {
+    color: COLORS.successText,
+  },
+  taskFileFormatText: {
+    fontSize: 11,
+    color: COLORS.subText,
+  },
+  bottomSyncCard: {
+    backgroundColor: "#EFF6FF",
+    borderRadius: 16,
+    padding: 14,
     flexDirection: "row",
     alignItems: "center",
-    gap: 14,
-    backgroundColor: "#F8FAFC",
-    padding: 14,
-    borderRadius: 16,
-    marginBottom: 16,
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
   },
-  profileAvatarLarge: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "#0B4A9E",
+  bottomSyncIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#DBEAFE",
     alignItems: "center",
     justifyContent: "center",
+    marginRight: 12,
   },
-  profileAvatarText: {
-    color: "#FFFFFF",
-    fontSize: 20,
-    fontWeight: "800",
-  },
-  profileNameLarge: {
+  bottomSyncEmoji: {
     fontSize: 16,
+  },
+  bottomSyncContent: {
+    flex: 1,
+  },
+  bottomSyncTitle: {
+    fontSize: 13,
     fontWeight: "800",
     color: COLORS.navyText,
+    marginBottom: 2,
   },
-  profileSubLarge: {
-    fontSize: 12,
+  bottomSyncDesc: {
+    fontSize: 11,
     color: COLORS.subText,
-    marginTop: 2,
+    lineHeight: 16,
   },
-  profileRolePill: {
-    backgroundColor: "#DBEAFE",
+  fabContainer: {
+    position: "absolute",
+    right: 18,
+    alignItems: "center",
+  },
+  fabPjmkBadge: {
+    backgroundColor: COLORS.navyText,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 8,
-    alignSelf: "flex-start",
-    marginTop: 6,
+    marginBottom: 4,
   },
-  profileRolePillText: {
-    color: "#1D4ED8",
-    fontSize: 10,
-    fontWeight: "700",
+  fabPjmkBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.5,
   },
-  sheetSectionTitle: {
-    fontSize: 13,
-    fontWeight: "700",
+  fabBtn: {
+    backgroundColor: COLORS.primaryBlue,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 28,
+    shadowColor: COLORS.primaryBlue,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  fabBtnIcon: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#FFFFFF",
+    marginRight: 6,
+  },
+  fabBtnText: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#FFFFFF",
+  },
+  bottomNav: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: COLORS.cardBg,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    flexDirection: "row",
+    paddingTop: 8,
+  },
+  navItem: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 46,
+  },
+  navIconBox: {
+    position: "relative",
+    marginBottom: 2,
+  },
+  navIconEmoji: {
+    fontSize: 18,
+  },
+  notifBadge: {
+    position: "absolute",
+    top: -4,
+    right: -8,
+    backgroundColor: COLORS.urgentText,
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 3,
+  },
+  notifBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "900",
+  },
+  navText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: COLORS.subText,
+  },
+  navTextActive: {
+    color: COLORS.primaryBlue,
+    fontWeight: "800",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-end",
+  },
+  modalSheet: {
+    backgroundColor: COLORS.cardBg,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    maxHeight: "80%",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "900",
     color: COLORS.navyText,
-    marginBottom: 8,
-    marginTop: 6,
   },
-  serverCard: {
-    backgroundColor: "#F8FAFC",
-    padding: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
+  modalCloseText: {
+    fontSize: 20,
+    color: COLORS.subText,
+    fontWeight: "bold",
+    padding: 4,
+  },
+  calendarSubtitle: {
+    fontSize: 13,
+    color: COLORS.subText,
     marginBottom: 14,
   },
-  serverStatusLabel: {
+  calendarEmptyText: {
+    fontSize: 13,
+    color: COLORS.subText,
+    textAlign: "center",
+    marginVertical: 20,
+  },
+  calendarItem: {
+    flexDirection: "row",
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    alignItems: "center",
+  },
+  calendarDateBox: {
+    backgroundColor: COLORS.lightBlueCard,
+    borderRadius: 8,
+    padding: 8,
+    marginRight: 12,
+    minWidth: 80,
+    alignItems: "center",
+  },
+  calendarDateText: {
     fontSize: 11,
-    fontWeight: "700",
-    color: "#475569",
-  },
-  serverStatusValue: {
-    fontSize: 12,
     fontWeight: "800",
-    color: "#0B4A9E",
-    marginTop: 2,
-    marginBottom: 8,
+    color: COLORS.primaryBlue,
+    textAlign: "center",
   },
-  ipHelpText: {
-    fontSize: 10,
-    color: "#64748B",
+  calendarItemInfo: {
+    flex: 1,
+  },
+  calendarItemTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: COLORS.navyText,
+    marginBottom: 2,
+  },
+  calendarItemSubject: {
+    fontSize: 12,
+    color: COLORS.subText,
+  },
+  calendarItemCountdown: {
+    fontSize: 11,
+    color: COLORS.urgentText,
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  statModalCard: {
+    backgroundColor: COLORS.lightBlueCard,
+    borderRadius: 16,
+    padding: 16,
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  statModalLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: COLORS.subText,
     marginBottom: 6,
   },
-  ipInputRow: {
+  statModalPercentage: {
+    fontSize: 36,
+    fontWeight: "900",
+    color: COLORS.primaryBlue,
+    marginBottom: 10,
+  },
+  progressBarBg: {
+    width: "100%",
+    height: 8,
+    backgroundColor: "#DBEAFE",
+    borderRadius: 4,
+    overflow: "hidden",
+  },
+  progressBarFill: {
+    height: "100%",
+    backgroundColor: COLORS.primaryBlue,
+    borderRadius: 4,
+  },
+  statNumbersRow: {
     flexDirection: "row",
-    gap: 8,
+    gap: 10,
+    marginBottom: 16,
   },
-  ipInput: {
+  statNumberBox: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "#CBD5E1",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    fontSize: 12,
-    color: "#1E293B",
-  },
-  ipSaveBtn: {
-    backgroundColor: "#0B4A9E",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    justifyContent: "center",
-  },
-  ipSaveText: {
-    color: "#FFFFFF",
-    fontSize: 11,
-    fontWeight: "700",
-  },
-  logoutBtn: {
-    backgroundColor: "#FEE2E2",
-    paddingVertical: 12,
-    borderRadius: 14,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
+    padding: 12,
     alignItems: "center",
-    marginTop: 6,
   },
-  logoutBtnText: {
-    color: "#DC2626",
-    fontSize: 13,
+  statNumberVal: {
+    fontSize: 20,
+    fontWeight: "900",
+    color: COLORS.navyText,
+    marginBottom: 2,
+  },
+  statNumberSub: {
+    fontSize: 10,
+    color: COLORS.subText,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  modalCloseBtn: {
+    backgroundColor: COLORS.primaryBlue,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    marginTop: 10,
+    marginBottom: 20,
+  },
+  modalCloseBtnText: {
+    color: "#FFFFFF",
+    fontSize: 14,
     fontWeight: "800",
   },
 });

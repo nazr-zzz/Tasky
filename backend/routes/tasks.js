@@ -5,112 +5,96 @@ import { pool } from "../db.js";
 const router = Router();
 
 // =========================================================================
-// HELPER: Normalisasi deadline input ke format MySQL DATETIME / TIMESTAMP
-// Mendukung format ISO, teks Indonesia ("16 Nov 2024, 23:59 WIB"), dsb.
+// HELPER
 // =========================================================================
-function normalizeDeadline(val) {
-  if (!val) return new Date().toISOString().slice(0, 19).replace("T", " ");
-  if (val instanceof Date && !isNaN(val.getTime())) {
-    return val.toISOString().slice(0, 19).replace("T", " ");
-  }
+
+// Ubah berbagai format deadline menjadi objek Date. Mengembalikan null jika tidak valid.
+function parseDeadline(val) {
+  if (!val) return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
 
   const str = String(val).trim();
 
-  // Jika format sudah SQL datetime standard (YYYY-MM-DD HH:MM:SS)
-  if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?$/.test(str)) {
-    return str.length === 16 ? `${str}:00` : str;
+  // Format SQL: YYYY-MM-DD HH:MM[:SS] (dianggap waktu lokal server)
+  let m = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (m) {
+    const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+    return isNaN(d.getTime()) ? null : d;
   }
 
-  // Jika format ISO standar (2026-11-15T16:59:00.000Z)
-  const isoParsed = new Date(str);
-  if (!isNaN(isoParsed.getTime()) && str.includes("-")) {
-    return isoParsed.toISOString().slice(0, 19).replace("T", " ");
+  // Format ISO 8601 (dari date picker aplikasi), contoh 2026-12-01T16:59:00.000Z
+  if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
+    const d = new Date(str);
+    return isNaN(d.getTime()) ? null : d;
   }
 
-  // Bersihkan karakter Indonesia (nama hari, simbol •, WIB/WITA/WIT)
-  const cleanStr = str
+  // Format teks Indonesia: "16 Nov 2026, 23:59 WIB"
+  const clean = str
     .replace(/^(senin|selasa|rabu|kamis|jumat|sabtu|minggu)[,\s]*/i, "")
     .replace(/[•,]/g, " ")
     .replace(/\s+(wib|wita|wit)$/i, "")
     .trim();
 
-  const monthMap = {
-    jan: 0, januari: 0,
-    feb: 1, februari: 1,
-    mar: 2, maret: 2,
-    apr: 3, april: 3,
-    mei: 4, may: 4,
-    jun: 5, juni: 5,
-    jul: 6, juli: 6,
-    agu: 7, agustus: 7, aug: 7,
-    sep: 8, september: 8,
-    okt: 9, oktober: 9, oct: 9,
-    nov: 10, november: 10,
-    des: 11, desember: 11, dec: 11,
+  const bulan = {
+    jan: 0, januari: 0, feb: 1, februari: 1, mar: 2, maret: 2,
+    apr: 3, april: 3, mei: 4, may: 4, jun: 5, juni: 5,
+    jul: 6, juli: 6, agu: 7, agustus: 7, aug: 7, sep: 8, september: 8,
+    okt: 9, oktober: 9, oct: 9, nov: 10, november: 10, des: 11, desember: 11, dec: 11,
   };
 
-  // Cocokkan: Tgl Bulan Tahun [Jam:Menit[:Detik]]
-  const match = cleanStr.match(
-    /^(\d{1,2})\s+([a-zA-Z]+)\s+(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/
-  );
-
-  if (match) {
-    const day = parseInt(match[1], 10);
-    const mStr = match[2].toLowerCase();
-    const year = parseInt(match[3], 10);
-    const hour = match[4] ? parseInt(match[4], 10) : 23;
-    const min = match[5] ? parseInt(match[5], 10) : 59;
-    const sec = match[6] ? parseInt(match[6], 10) : 0;
-
-    const month = monthMap[mStr];
-    if (month !== undefined) {
-      const d = new Date(year, month, day, hour, min, sec);
-      const pad = (n) => String(n).padStart(2, "0");
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  m = clean.match(/^(\d{1,2})\s+([a-zA-Z]+)\s+(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (m) {
+    const bln = bulan[m[2].toLowerCase()];
+    if (bln !== undefined) {
+      const d = new Date(+m[3], bln, +m[1], m[4] ? +m[4] : 23, m[5] ? +m[5] : 59, m[6] ? +m[6] : 0);
+      return isNaN(d.getTime()) ? null : d;
     }
   }
 
-  // Handle format "Besok, 23:59 WIB"
-  if (/besok/i.test(str)) {
-    const d = new Date();
-    d.setDate(d.getDate() + 1);
-    const timeMatch = str.match(/(\d{1,2}):(\d{2})/);
-    const h = timeMatch ? parseInt(timeMatch[1], 10) : 23;
-    const m = timeMatch ? parseInt(timeMatch[2], 10) : 59;
-    d.setHours(h, m, 0, 0);
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
-  }
-
-  // Fallback ke Date parser default atau +3 hari
-  const fallback = new Date();
-  fallback.setDate(fallback.getDate() + 3);
-  return fallback.toISOString().slice(0, 19).replace("T", " ");
+  return null;
 }
 
-// Format tanggal untuk tampilan UI
+// Format tanggal untuk teks notifikasi / tampilan
 function formatIndonesianDeadline(dateVal) {
   if (!dateVal) return "";
   const d = new Date(dateVal);
   if (isNaN(d.getTime())) return String(dateVal);
 
-  const months = [
-    "Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
-    "Jul", "Agu", "Sep", "Okt", "Nov", "Des"
-  ];
+  const months = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
   const days = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
-  const dayName = days[d.getDay()];
-  const day = d.getDate();
-  const month = months[d.getMonth()];
-  const year = d.getFullYear();
   const hours = String(d.getHours()).padStart(2, "0");
   const mins = String(d.getMinutes()).padStart(2, "0");
 
-  return `${dayName}, ${day} ${month} ${year} • ${hours}:${mins} WIB`;
+  return `${days[d.getDay()]}, ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()} • ${hours}:${mins} WIB`;
+}
+
+// Peran user di sebuah kelas (null jika bukan anggota)
+async function getPeran(kelasId, userId) {
+  if (!kelasId || !userId) return null;
+  const [rows] = await pool.query(
+    `SELECT PERAN FROM ANGGOTA_KELAS WHERE KELAS_ID = ? AND USER_ID = ? LIMIT 1`,
+    [kelasId, userId]
+  );
+  return rows.length ? rows[0].PERAN : null;
+}
+
+// PJMK Utama, PJMK Pendamping, atau data lama ("PJMK (Admin Kelas)", "Wakil PJMK")
+const isPjmk = (peran) => {
+  const p = String(peran || "").toLowerCase();
+  return p.includes("pjmk") || p.includes("wakil");
+};
+
+function tambahFormatTask(r) {
+  const valid = r.DEADLINE instanceof Date && !isNaN(r.DEADLINE.getTime());
+  return {
+    ...r,
+    DEADLINE_FORMATTED: formatIndonesianDeadline(r.DEADLINE),
+    DEADLINE_ISO: valid ? r.DEADLINE.toISOString() : r.DEADLINE ? String(r.DEADLINE) : null,
+  };
 }
 
 // =========================================================================
-// GET /tasks/stats: Statistik pengerjaan tugas per pengguna (SRS US-11)
+// GET /tasks/stats?userId=...
 // =========================================================================
 router.get("/stats", async (req, res) => {
   const { userId } = req.query;
@@ -148,9 +132,7 @@ router.get("/stats", async (req, res) => {
 });
 
 // =========================================================================
-// GET /tasks: Ambil daftar task
-// - Jika ada userId: HANYA ambil tugas dari kelas yang DI-IKUTI oleh user tsb (SRS M1 / Mahasiswa Baru rule)
-// - Diurutkan berdasarkan DEADLINE ASC (deadline terdekat lebih dulu - SRS US-04 / F3)
+// GET /tasks?userId=...&kelasId=...  (deadline terdekat lebih dulu)
 // =========================================================================
 router.get("/", async (req, res) => {
   const { userId, kelasId } = req.query;
@@ -160,16 +142,17 @@ router.get("/", async (req, res) => {
     const params = [];
 
     if (userId) {
-      // Hanya ambil tugas pada kelas yang user terdaftar sebagai anggota
       sql = `
         SELECT t.TASK_ID, t.KELAS_ID, t.DIBUAT_OLEH, t.DIUBAH_OLEH, t.JUDUL_TUGAS,
                t.MATA_KULIAH, t.DEADLINE, t.DESKRIPSI, t.UPDATED_AT,
                k.NAMA_KELAS, k.KODE_KELAS,
+               u.NAMA AS NAMA_PEMBUAT,
                COALESCE(st.STATUS, 'belum dikerjakan') AS STATUS_USER,
                st.UPDATED_AT AS STATUS_UPDATED_AT
         FROM TASK t
         JOIN KELAS k ON t.KELAS_ID = k.KELAS_ID
         JOIN ANGGOTA_KELAS ak ON k.KELAS_ID = ak.KELAS_ID AND ak.USER_ID = ?
+        LEFT JOIN USER u ON t.DIBUAT_OLEH = u.USER_ID
         LEFT JOIN STATUS_TUGAS st ON t.TASK_ID = st.TASK_ID AND st.USER_ID = ?
       `;
       params.push(userId, userId);
@@ -186,33 +169,16 @@ router.get("/", async (req, res) => {
         FROM TASK t
         LEFT JOIN KELAS k ON t.KELAS_ID = k.KELAS_ID
       `;
-
       if (kelasId) {
         sql += ` WHERE t.KELAS_ID = ?`;
         params.push(kelasId);
       }
     }
 
-    // Urutan prioritas deadline terdekat lebih dulu (US-04 / F3)
     sql += ` ORDER BY t.DEADLINE ASC`;
 
     const [rows] = await pool.query(sql, params);
-
-    // Format output tanggal yang bersahabat
-    const formattedRows = rows.map((r) => {
-      const isValidDate = r.DEADLINE instanceof Date && !isNaN(r.DEADLINE.getTime());
-      return {
-        ...r,
-        DEADLINE_FORMATTED: formatIndonesianDeadline(r.DEADLINE),
-        DEADLINE_ISO: isValidDate
-          ? r.DEADLINE.toISOString()
-          : r.DEADLINE
-          ? String(r.DEADLINE)
-          : null,
-      };
-    });
-
-    res.json(formattedRows);
+    res.json(rows.map(tambahFormatTask));
   } catch (e) {
     console.error("Gagal mengambil data task:", e);
     res.status(500).json({ pesan: "Gagal mengambil data task", error: e.message });
@@ -220,29 +186,30 @@ router.get("/", async (req, res) => {
 });
 
 // =========================================================================
-// GET /tasks/:id: Ambil satu task berdasarkan ID
+// GET /tasks/:id
 // =========================================================================
 router.get("/:id", async (req, res) => {
   const { userId } = req.query;
 
   try {
-    let sql = `
-      SELECT t.*, k.NAMA_KELAS, k.KODE_KELAS
-    `;
-    const params = [req.params.id];
+    let sql;
+    const params = [];
 
     if (userId) {
-      sql += `, COALESCE(st.STATUS, 'belum dikerjakan') AS STATUS_USER,
-                st.UPDATED_AT AS STATUS_UPDATED_AT
-              FROM TASK t
-              LEFT JOIN KELAS k ON t.KELAS_ID = k.KELAS_ID
-              LEFT JOIN STATUS_TUGAS st ON t.TASK_ID = st.TASK_ID AND st.USER_ID = ?
-              WHERE t.TASK_ID = ?`;
-      params.unshift(userId);
+      sql = `SELECT t.*, k.NAMA_KELAS, k.KODE_KELAS,
+                    COALESCE(st.STATUS, 'belum dikerjakan') AS STATUS_USER,
+                    st.UPDATED_AT AS STATUS_UPDATED_AT
+             FROM TASK t
+             LEFT JOIN KELAS k ON t.KELAS_ID = k.KELAS_ID
+             LEFT JOIN STATUS_TUGAS st ON t.TASK_ID = st.TASK_ID AND st.USER_ID = ?
+             WHERE t.TASK_ID = ?`;
+      params.push(userId, req.params.id);
     } else {
-      sql += ` FROM TASK t
-               LEFT JOIN KELAS k ON t.KELAS_ID = k.KELAS_ID
-               WHERE t.TASK_ID = ?`;
+      sql = `SELECT t.*, k.NAMA_KELAS, k.KODE_KELAS
+             FROM TASK t
+             LEFT JOIN KELAS k ON t.KELAS_ID = k.KELAS_ID
+             WHERE t.TASK_ID = ?`;
+      params.push(req.params.id);
     }
 
     const [rows] = await pool.query(sql, params);
@@ -250,16 +217,7 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ pesan: "Data task tidak ditemukan" });
     }
 
-    const task = rows[0];
-    const isValidDate = task.DEADLINE instanceof Date && !isNaN(task.DEADLINE.getTime());
-    task.DEADLINE_FORMATTED = formatIndonesianDeadline(task.DEADLINE);
-    task.DEADLINE_ISO = isValidDate
-      ? task.DEADLINE.toISOString()
-      : task.DEADLINE
-      ? String(task.DEADLINE)
-      : null;
-
-    res.json(task);
+    res.json(tambahFormatTask(rows[0]));
   } catch (e) {
     console.error("Gagal mengambil detail task:", e);
     res.status(500).json({ pesan: "Gagal mengambil detail task", error: e.message });
@@ -267,38 +225,34 @@ router.get("/:id", async (req, res) => {
 });
 
 // =========================================================================
-// POST /tasks: Tambah task baru (US-03 / F2)
+// POST /tasks  -> tambah tugas (hanya PJMK kelas tsb)
 // =========================================================================
 router.post("/", async (req, res) => {
-  const {
-    task_id,
-    kelas_id,
-    dibuat_oleh,
-    judul_tugas,
-    mata_kuliah,
-    deadline,
-    deskripsi,
-  } = req.body;
+  const { task_id, kelas_id, dibuat_oleh, judul_tugas, mata_kuliah, deadline, deskripsi } = req.body;
 
-  const finalTaskId = task_id || randomUUID();
-
-  // Validasi kolom wajib berdasarkan struktur tabel
-  if (
-    !judul_tugas ||
-    !mata_kuliah ||
-    !deadline ||
-    !kelas_id ||
-    !dibuat_oleh
-  ) {
+  if (!judul_tugas || !mata_kuliah || !deadline || !kelas_id || !dibuat_oleh) {
     return res.status(400).json({
       pesan: "kelas_id, dibuat_oleh, judul_tugas, mata_kuliah, dan deadline wajib diisi",
     });
   }
 
-  // Normalisasi format deadline ke format MySQL timestamp
-  const normalizedDeadline = normalizeDeadline(deadline);
+  const deadlineDate = parseDeadline(deadline);
+  if (!deadlineDate) {
+    return res.status(400).json({
+      pesan: "Format deadline tidak valid. Gunakan tanggal dan jam yang benar.",
+    });
+  }
+
+  const finalTaskId = task_id || randomUUID();
 
   try {
+    const peran = await getPeran(kelas_id, dibuat_oleh);
+    if (!isPjmk(peran)) {
+      return res.status(403).json({
+        pesan: "Hanya PJMK Utama atau PJMK Pendamping yang dapat menambah tugas.",
+      });
+    }
+
     await pool.query(
       `INSERT INTO TASK (TASK_ID, KELAS_ID, DIBUAT_OLEH, JUDUL_TUGAS, MATA_KULIAH, DEADLINE, DESKRIPSI)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -308,30 +262,25 @@ router.post("/", async (req, res) => {
         dibuat_oleh,
         judul_tugas.trim(),
         mata_kuliah.trim(),
-        normalizedDeadline,
+        deadlineDate,
         deskripsi ? deskripsi.trim() : null,
       ]
     );
 
-    // Kirim notifikasi tugas baru ke seluruh anggota kelas (SRS US-06)
+    // Notifikasi tugas baru ke anggota lain
     try {
       const [members] = await pool.query(
         `SELECT USER_ID FROM ANGGOTA_KELAS WHERE KELAS_ID = ?`,
         [kelas_id]
       );
+      const pesan = `Tugas baru di ${mata_kuliah.trim()}: "${judul_tugas.trim()}" (Deadline: ${formatIndonesianDeadline(deadlineDate)})`;
 
       for (const m of members) {
         if (m.USER_ID !== dibuat_oleh) {
           await pool.query(
             `INSERT INTO NOTIFICATION (NOTIF_ID, TASK_ID, USER_ID, JENIS, PESAN, WAKTU_KIRIM, IS_READ)
              VALUES (?, ?, ?, ?, ?, NOW(), 0)`,
-            [
-              randomUUID(),
-              finalTaskId,
-              m.USER_ID,
-              "tugas baru",
-              `Tugas baru di ${mata_kuliah.trim()}: "${judul_tugas.trim()}" (Deadline: ${formatIndonesianDeadline(normalizedDeadline)})`,
-            ]
+            [randomUUID(), finalTaskId, m.USER_ID, "tugas baru", pesan]
           );
         }
       }
@@ -344,172 +293,231 @@ router.post("/", async (req, res) => {
       kelas_id,
       judul_tugas: judul_tugas.trim(),
       mata_kuliah: mata_kuliah.trim(),
-      deadline: normalizedDeadline,
-      deadline_formatted: formatIndonesianDeadline(normalizedDeadline),
+      deadline: deadlineDate.toISOString(),
+      deadline_formatted: formatIndonesianDeadline(deadlineDate),
       deskripsi: deskripsi ? deskripsi.trim() : null,
     });
   } catch (e) {
-    console.error("ERROR ASLI MYSQL:", e);
-    res.status(500).json({ pesan: "Gagal menyimpan data task", error_detail: e.message });
+    if (e.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ pesan: "Tugas dengan ID tersebut sudah ada." });
+    }
+    console.error("Gagal menambahkan task:", e);
+    res.status(500).json({ pesan: "Gagal menambahkan task", error: e.message });
   }
 });
 
 // =========================================================================
-// PUT /tasks/:id: Ubah task / perbarui deadline (US-03, US-07 / F4)
+// PUT /tasks/:id  -> ubah tugas / ubah deadline (hanya PJMK kelas tsb)
+// diubah_oleh wajib. Notifikasi hanya dikirim jika deadline berubah.
 // =========================================================================
 router.put("/:id", async (req, res) => {
-  const { judul_tugas, mata_kuliah, deadline, deskripsi, diubah_oleh, alasan } =
-    req.body;
+  const { diubah_oleh, judul_tugas, mata_kuliah, deadline, deskripsi } = req.body;
 
-  if (!judul_tugas || !mata_kuliah || !deadline) {
-    return res
-      .status(400)
-      .json({ pesan: "judul_tugas, mata_kuliah, dan deadline wajib diisi" });
+  if (!diubah_oleh) {
+    return res.status(400).json({ pesan: "diubah_oleh wajib diisi" });
   }
 
-  // Normalisasi format deadline ke format MySQL timestamp
-  const normalizedDeadline = normalizeDeadline(deadline);
-
   try {
-    // Ambil info task lama untuk cek apakah deadline diubah
-    const [oldTask] = await pool.query(
-      `SELECT DEADLINE, KELAS_ID, JUDUL_TUGAS, MATA_KULIAH FROM TASK WHERE TASK_ID = ?`,
-      [req.params.id]
-    );
-
-    const [hasil] = await pool.query(
-      `UPDATE TASK
-       SET JUDUL_TUGAS = ?, MATA_KULIAH = ?, DEADLINE = ?, DESKRIPSI = ?, DIUBAH_OLEH = ?
-       WHERE TASK_ID = ?`,
-      [
-        judul_tugas.trim(),
-        mata_kuliah.trim(),
-        normalizedDeadline,
-        deskripsi ? deskripsi.trim() : null,
-        diubah_oleh || null,
-        req.params.id,
-      ]
-    );
-
-    if (hasil.affectedRows === 0) {
+    const [rows] = await pool.query(`SELECT * FROM TASK WHERE TASK_ID = ? LIMIT 1`, [
+      req.params.id,
+    ]);
+    if (rows.length === 0) {
       return res.status(404).json({ pesan: "Data task tidak ditemukan" });
     }
+    const lama = rows[0];
 
-    // Jika deadline berubah, buat notifikasi untuk seluruh anggota kelas (SRS US-07)
-    if (oldTask.length > 0) {
+    const peran = await getPeran(lama.KELAS_ID, diubah_oleh);
+    if (!isPjmk(peran)) {
+      return res.status(403).json({
+        pesan: "Hanya PJMK Utama atau PJMK Pendamping yang dapat mengubah tugas.",
+      });
+    }
+
+    // Deadline: pakai yang baru jika dikirim, jika tidak pertahankan yang lama
+    let deadlineBaru = lama.DEADLINE;
+    let deadlineBerubah = false;
+
+    if (deadline !== undefined && deadline !== null && String(deadline).trim() !== "") {
+      const parsed = parseDeadline(deadline);
+      if (!parsed) {
+        return res.status(400).json({
+          pesan: "Format deadline tidak valid. Gunakan tanggal dan jam yang benar.",
+        });
+      }
+      const waktuLama = lama.DEADLINE ? new Date(lama.DEADLINE).getTime() : null;
+      deadlineBerubah = waktuLama !== parsed.getTime();
+      deadlineBaru = parsed;
+    }
+
+    const judulBaru =
+      judul_tugas !== undefined && String(judul_tugas).trim() !== ""
+        ? String(judul_tugas).trim()
+        : lama.JUDUL_TUGAS;
+    const mkBaru =
+      mata_kuliah !== undefined && String(mata_kuliah).trim() !== ""
+        ? String(mata_kuliah).trim()
+        : lama.MATA_KULIAH;
+    const deskBaru =
+      deskripsi !== undefined
+        ? deskripsi && String(deskripsi).trim() !== ""
+          ? String(deskripsi).trim()
+          : null
+        : lama.DESKRIPSI;
+
+    // DEADLINE selalu ditulis eksplisit agar tidak ikut ter-reset otomatis oleh MySQL
+    await pool.query(
+      `UPDATE TASK
+       SET JUDUL_TUGAS = ?, MATA_KULIAH = ?, DEADLINE = ?, DESKRIPSI = ?,
+           DIUBAH_OLEH = ?, UPDATED_AT = NOW()
+       WHERE TASK_ID = ?`,
+      [judulBaru, mkBaru, deadlineBaru, deskBaru, diubah_oleh, req.params.id]
+    );
+
+    // Notifikasi hanya jika deadline berubah
+    if (deadlineBerubah) {
       try {
-        const oldDeadlineTime = new Date(oldTask[0].DEADLINE).getTime();
-        const newDeadlineTime = new Date(normalizedDeadline).getTime();
-
-        // Kirim notifikasi jika deadline diubah atau ada alasan perubahan
         const [members] = await pool.query(
           `SELECT USER_ID FROM ANGGOTA_KELAS WHERE KELAS_ID = ?`,
-          [oldTask[0].KELAS_ID]
+          [lama.KELAS_ID]
         );
-
-        const deadlineText = formatIndonesianDeadline(normalizedDeadline);
-        const alasanText = alasan && String(alasan).trim().length > 0 ? ` Alasan: ${String(alasan).trim()}` : "";
+        const pesan = `Deadline tugas "${judulBaru}" (${mkBaru}) diubah menjadi ${formatIndonesianDeadline(deadlineBaru)}`;
 
         for (const m of members) {
-          await pool.query(
-            `INSERT INTO NOTIFICATION (NOTIF_ID, TASK_ID, USER_ID, JENIS, PESAN, WAKTU_KIRIM, IS_READ)
-             VALUES (?, ?, ?, ?, ?, NOW(), 0)`,
-            [
-              randomUUID(),
-              req.params.id,
-              m.USER_ID,
-              "perubahan deadline",
-              `PJMK telah memperbarui batas waktu pengumpulan tugas "${judul_tugas.trim()}" menjadi ${deadlineText}.${alasanText}`,
-            ]
-          );
+          if (m.USER_ID !== diubah_oleh) {
+            await pool.query(
+              `INSERT INTO NOTIFICATION (NOTIF_ID, TASK_ID, USER_ID, JENIS, PESAN, WAKTU_KIRIM, IS_READ)
+               VALUES (?, ?, ?, ?, ?, NOW(), 0)`,
+              [randomUUID(), req.params.id, m.USER_ID, "perubahan deadline", pesan]
+            );
+          }
         }
       } catch (notifErr) {
-        console.warn("Gagal membuat notifikasi perubahan deadline:", notifErr.message);
+        console.warn("Pemberitahuan perubahan deadline gagal dikirim:", notifErr.message);
       }
     }
 
     res.json({
+      pesan: "Tugas berhasil diperbarui",
       task_id: req.params.id,
-      judul_tugas: judul_tugas.trim(),
-      mata_kuliah: mata_kuliah.trim(),
-      deadline: normalizedDeadline,
-      deadline_formatted: formatIndonesianDeadline(normalizedDeadline),
-      deskripsi: deskripsi ? deskripsi.trim() : null,
-      diubah_oleh: diubah_oleh || null,
+      judul_tugas: judulBaru,
+      mata_kuliah: mkBaru,
+      deadline: new Date(deadlineBaru).toISOString(),
+      deadline_formatted: formatIndonesianDeadline(deadlineBaru),
+      deskripsi: deskBaru,
+      deadline_berubah: deadlineBerubah,
     });
   } catch (e) {
-    console.error("Gagal memperbarui data task:", e);
-    res.status(500).json({ pesan: "Gagal memperbarui data task", error: e.message });
+    console.error("Gagal memperbarui task:", e);
+    res.status(500).json({ pesan: "Gagal memperbarui task", error: e.message });
   }
 });
 
 // =========================================================================
-// POST /tasks/:id/status: Perbarui status tugas untuk user (US-05 / F5)
+// POST /tasks/:id/status  -> ubah status pengerjaan milik user
+// body: { user_id, status }
 // =========================================================================
 router.post("/:id/status", async (req, res) => {
   const { user_id, status } = req.body;
 
   if (!user_id || !status) {
-    return res.status(400).json({
-      pesan: "user_id dan status ('belum dikerjakan' | 'selesai') wajib diisi",
-    });
+    return res.status(400).json({ pesan: "user_id dan status wajib diisi" });
   }
 
-  const normalizedStatus =
-    status.toLowerCase() === "selesai" ? "selesai" : "belum dikerjakan";
-
   try {
-    const [existing] = await pool.query(
-      `SELECT STATUS_ID FROM STATUS_TUGAS WHERE TASK_ID = ? AND USER_ID = ?`,
+    const [rows] = await pool.query(
+      `SELECT KELAS_ID FROM TASK WHERE TASK_ID = ? LIMIT 1`,
+      [req.params.id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ pesan: "Data task tidak ditemukan" });
+    }
+
+    const peran = await getPeran(rows[0].KELAS_ID, user_id);
+    if (!peran) {
+      return res.status(403).json({ pesan: "Anda bukan anggota kelas tugas ini." });
+    }
+
+    const statusBersih = String(status).trim().toLowerCase();
+
+    const [ada] = await pool.query(
+      `SELECT TASK_ID FROM STATUS_TUGAS WHERE TASK_ID = ? AND USER_ID = ? LIMIT 1`,
       [req.params.id, user_id]
     );
 
-    if (existing.length > 0) {
+    if (ada.length > 0) {
       await pool.query(
         `UPDATE STATUS_TUGAS SET STATUS = ?, UPDATED_AT = NOW() WHERE TASK_ID = ? AND USER_ID = ?`,
-        [normalizedStatus, req.params.id, user_id]
+        [statusBersih, req.params.id, user_id]
       );
     } else {
-      const statusId = randomUUID();
       await pool.query(
-        `INSERT INTO STATUS_TUGAS (STATUS_ID, TASK_ID, USER_ID, STATUS, UPDATED_AT)
-         VALUES (?, ?, ?, ?, NOW())`,
-        [statusId, req.params.id, user_id, normalizedStatus]
+        `INSERT INTO STATUS_TUGAS (TASK_ID, USER_ID, STATUS, UPDATED_AT) VALUES (?, ?, ?, NOW())`,
+        [req.params.id, user_id, statusBersih]
       );
     }
 
     res.json({
-      pesan: "Status tugas berhasil diperbarui",
+      pesan: "Status pengerjaan diperbarui",
       task_id: req.params.id,
-      status: normalizedStatus,
+      user_id,
+      status: statusBersih,
     });
   } catch (e) {
-    console.error("Gagal update status tugas:", e);
-    res.status(500).json({ pesan: "Gagal mengubah status tugas", error: e.message });
+    console.error("Gagal memperbarui status tugas:", e);
+    res.status(500).json({ pesan: "Gagal memperbarui status pengerjaan", error: e.message });
   }
 });
 
 // =========================================================================
-// DELETE /tasks/:id: Hapus task berdasarkan ID (US-03 / Hak Akses PJMK)
+// DELETE /tasks/:id?oleh=<userId>  -> hapus tugas (hanya PJMK kelas tsb)
 // =========================================================================
 router.delete("/:id", async (req, res) => {
+  const oleh = req.query.oleh;
+
+  if (!oleh) {
+    return res.status(400).json({ pesan: "Parameter oleh (userId) wajib diisi" });
+  }
+
+  let conn;
   try {
-    // Hapus relasi status_tugas dan notifikasi terlebih dahulu agar tidak melanggar foreign key constraint
-    await pool.query("DELETE FROM STATUS_TUGAS WHERE TASK_ID = ?", [req.params.id]);
-    await pool.query("DELETE FROM NOTIFICATION WHERE TASK_ID = ?", [req.params.id]);
-
-    const [hasil] = await pool.query("DELETE FROM TASK WHERE TASK_ID = ?", [
-      req.params.id,
-    ]);
-
-    if (hasil.affectedRows === 0) {
+    const [rows] = await pool.query(
+      `SELECT KELAS_ID FROM TASK WHERE TASK_ID = ? LIMIT 1`,
+      [req.params.id]
+    );
+    if (rows.length === 0) {
       return res.status(404).json({ pesan: "Data task tidak ditemukan" });
     }
 
-    res.status(204).end();
+    const peran = await getPeran(rows[0].KELAS_ID, oleh);
+    if (!isPjmk(peran)) {
+      return res.status(403).json({
+        pesan: "Hanya PJMK Utama atau PJMK Pendamping yang dapat menghapus tugas.",
+      });
+    }
+
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+
+    // Hapus data turunan dulu agar tidak terhalang foreign key
+    await conn.query(`DELETE FROM NOTIFICATION WHERE TASK_ID = ?`, [req.params.id]);
+    await conn.query(`DELETE FROM STATUS_TUGAS WHERE TASK_ID = ?`, [req.params.id]);
+    await conn.query(`DELETE FROM TASK WHERE TASK_ID = ?`, [req.params.id]);
+
+    await conn.commit();
+
+    res.json({ pesan: "Tugas berhasil dihapus" });
   } catch (e) {
-    console.error("Gagal menghapus data task:", e);
-    res.status(500).json({ pesan: "Gagal menghapus data task", error: e.message });
+    if (conn) {
+      try {
+        await conn.rollback();
+      } catch {
+        // abaikan
+      }
+    }
+    console.error("Gagal menghapus task:", e);
+    res.status(500).json({ pesan: "Gagal menghapus task", error: e.message });
+  } finally {
+    if (conn) conn.release();
   }
 });
 

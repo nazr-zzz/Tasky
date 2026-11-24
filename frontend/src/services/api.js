@@ -1,4 +1,3 @@
-
 import { Platform } from "react-native";
 import Constants from "expo-constants";
 
@@ -96,6 +95,33 @@ export async function fetchWithTimeout(
   }
 }
 
+// Membaca JSON dengan aman: tidak error jika respons kosong / bukan JSON
+async function parseJson(response) {
+  try {
+    return await response.json();
+  } catch {
+    return {};
+  }
+}
+
+// Deadline selalu dikirim dalam format ISO (Date, angka, atau teks yang bisa dibaca)
+function normalizeDeadline(value) {
+  if (value instanceof Date) {
+    return isNaN(value.getTime()) ? value : value.toISOString();
+  }
+  return value;
+}
+
+function normalizeTaskPayload(taskData) {
+  const payload = { ...taskData };
+
+  if (payload.deadline !== undefined && payload.deadline !== null) {
+    payload.deadline = normalizeDeadline(payload.deadline);
+  }
+
+  return payload;
+}
+
 // =====================================================
 // AUTH SERVICES
 // =====================================================
@@ -103,21 +129,13 @@ export async function fetchWithTimeout(
 export async function loginUser(identitas, password) {
   const baseUrl = getBaseUrl();
 
-  const response = await fetchWithTimeout(
-    `${baseUrl}/api/auth/login`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        identitas,
-        password,
-      }),
-    }
-  );
+  const response = await fetchWithTimeout(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identitas, password }),
+  });
 
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Login gagal.");
@@ -126,26 +144,22 @@ export async function loginUser(identitas, password) {
   return data;
 }
 
-export async function registerUser(nama, nim, email, password) {
+// semester bersifat opsional (angka 1-14)
+export async function registerUser(nama, nim, email, password, semester) {
   const baseUrl = getBaseUrl();
 
-  const response = await fetchWithTimeout(
-    `${baseUrl}/api/auth/register`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        nama,
-        nim,
-        email,
-        password,
-      }),
-    }
-  );
+  const body = { nama, nim, email, password };
+  if (semester !== undefined && semester !== null && semester !== "") {
+    body.semester = Number(semester);
+  }
 
-  const data = await response.json();
+  const response = await fetchWithTimeout(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Registrasi gagal.");
@@ -154,19 +168,54 @@ export async function registerUser(nama, nim, email, password) {
   return data;
 }
 
-export async function kirimKodeReset(email) {
+export async function fetchProfile(userId) {
   const baseUrl = getBaseUrl();
 
   const response = await fetchWithTimeout(
-    `${baseUrl}/api/auth/lupa-password`,
+    `${baseUrl}/api/auth/profile/${encodeURIComponent(userId)}`
+  );
+
+  const data = await parseJson(response);
+
+  if (!response.ok) {
+    throw new Error(data.pesan || "Gagal mengambil profil");
+  }
+
+  return data;
+}
+
+// profileData: { nama?, email?, password?, semester? }
+export async function updateProfile(userId, profileData) {
+  const baseUrl = getBaseUrl();
+
+  const response = await fetchWithTimeout(
+    `${baseUrl}/api/auth/profile/${encodeURIComponent(userId)}`,
     {
-      method: "POST",
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify(profileData),
     }
   );
 
-  const data = await response.json();
+  const data = await parseJson(response);
+
+  if (!response.ok) {
+    throw new Error(data.pesan || "Gagal memperbarui profil");
+  }
+
+  return data;
+}
+
+export async function kirimKodeReset(email) {
+  const baseUrl = getBaseUrl();
+
+  const response = await fetchWithTimeout(`${baseUrl}/api/auth/lupa-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal mengirim kode verifikasi.");
@@ -178,16 +227,13 @@ export async function kirimKodeReset(email) {
 export async function resetPasswordDenganKode(email, kode, passwordBaru) {
   const baseUrl = getBaseUrl();
 
-  const response = await fetchWithTimeout(
-    `${baseUrl}/api/auth/reset-password`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, kode, passwordBaru }),
-    }
-  );
+  const response = await fetchWithTimeout(`${baseUrl}/api/auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, kode, passwordBaru }),
+  });
 
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal mengubah kata sandi.");
@@ -195,6 +241,7 @@ export async function resetPasswordDenganKode(email, kode, passwordBaru) {
 
   return data;
 }
+
 // =====================================================
 // KELAS SERVICES (US-01, US-02, US-09)
 // =====================================================
@@ -207,8 +254,7 @@ export async function fetchClasses(userId) {
     : `${baseUrl}/api/kelas`;
 
   const response = await fetchWithTimeout(url);
-
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal mengambil daftar kelas");
@@ -223,8 +269,7 @@ export async function fetchClassDetail(kelasId) {
   const response = await fetchWithTimeout(
     `${baseUrl}/api/kelas/${encodeURIComponent(kelasId)}`
   );
-
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal mengambil detail kelas");
@@ -233,29 +278,16 @@ export async function fetchClassDetail(kelasId) {
   return data;
 }
 
-export async function createClass(
-  nama_kelas,
-  kode_kelas,
-  dibuat_oleh
-) {
+export async function createClass(nama_kelas, kode_kelas, dibuat_oleh) {
   const baseUrl = getBaseUrl();
 
-  const response = await fetchWithTimeout(
-    `${baseUrl}/api/kelas`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        nama_kelas,
-        kode_kelas,
-        dibuat_oleh,
-      }),
-    }
-  );
+  const response = await fetchWithTimeout(`${baseUrl}/api/kelas`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nama_kelas, kode_kelas, dibuat_oleh }),
+  });
 
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal membuat kelas");
@@ -267,21 +299,13 @@ export async function createClass(
 export async function joinClass(kode_kelas, user_id) {
   const baseUrl = getBaseUrl();
 
-  const response = await fetchWithTimeout(
-    `${baseUrl}/api/kelas/join`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        kode_kelas,
-        user_id,
-      }),
-    }
-  );
+  const response = await fetchWithTimeout(`${baseUrl}/api/kelas/join`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kode_kelas, user_id }),
+  });
 
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal bergabung ke kelas");
@@ -296,8 +320,7 @@ export async function fetchClassMembers(kelasId) {
   const response = await fetchWithTimeout(
     `${baseUrl}/api/kelas/${encodeURIComponent(kelasId)}/anggota`
   );
-
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal mengambil anggota kelas");
@@ -313,16 +336,12 @@ export async function updateMemberRole(kelasId, userId, peran) {
     `${baseUrl}/api/kelas/${encodeURIComponent(kelasId)}/anggota/${encodeURIComponent(userId)}/peran`,
     {
       method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        peran,
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ peran }),
     }
   );
 
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal mengubah peran anggota");
@@ -336,12 +355,10 @@ export async function leaveClass(kelasId, userId) {
 
   const response = await fetchWithTimeout(
     `${baseUrl}/api/kelas/${encodeURIComponent(kelasId)}/anggota/${encodeURIComponent(userId)}`,
-    {
-      method: "DELETE",
-    }
+    { method: "DELETE" }
   );
 
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal keluar dari kelas");
@@ -355,12 +372,10 @@ export async function deleteClass(kelasId) {
 
   const response = await fetchWithTimeout(
     `${baseUrl}/api/kelas/${encodeURIComponent(kelasId)}`,
-    {
-      method: "DELETE",
-    }
+    { method: "DELETE" }
   );
 
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal menghapus kelas");
@@ -386,8 +401,7 @@ export async function fetchTasks(userId, kelasId) {
   }`;
 
   const response = await fetchWithTimeout(url);
-
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal mengambil data tugas");
@@ -402,8 +416,7 @@ export async function fetchTaskStats(userId) {
   const response = await fetchWithTimeout(
     `${baseUrl}/tasks/stats?userId=${encodeURIComponent(userId)}`
   );
-
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal mengambil statistik tugas");
@@ -412,21 +425,25 @@ export async function fetchTaskStats(userId) {
   return data;
 }
 
+/**
+ * Tambah tugas (hanya PJMK).
+ * taskData wajib berisi: dibuat_oleh (userId) dan kelas_id.
+ * deadline boleh berupa Date atau string ISO.
+ */
 export async function createTask(taskData) {
   const baseUrl = getBaseUrl();
 
-  const response = await fetchWithTimeout(
-    `${baseUrl}/tasks`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(taskData),
-    }
-  );
+  if (!taskData || !taskData.dibuat_oleh || !taskData.kelas_id) {
+    throw new Error("Data pembuat tugas dan kelas wajib disertakan.");
+  }
 
-  const data = await response.json();
+  const response = await fetchWithTimeout(`${baseUrl}/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(normalizeTaskPayload(taskData)),
+  });
+
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal menambahkan tugas");
@@ -435,21 +452,36 @@ export async function createTask(taskData) {
   return data;
 }
 
-export async function updateTask(taskId, taskData) {
+/**
+ * Ubah tugas / ubah deadline (hanya PJMK).
+ * userId = pengguna yang sedang login, dikirim sebagai diubah_oleh.
+ * Contoh: updateTask(task.id, { judul, deadline: date.toISOString() }, currentUser.userId)
+ * Untuk kompatibilitas, userId juga boleh disertakan langsung di taskData.diubah_oleh.
+ */
+export async function updateTask(taskId, taskData, userId) {
   const baseUrl = getBaseUrl();
+
+  const diubahOleh = userId || taskData?.diubah_oleh;
+
+  if (!diubahOleh) {
+    throw new Error("Identitas pengguna (diubah_oleh) wajib disertakan.");
+  }
+
+  const payload = {
+    ...normalizeTaskPayload(taskData),
+    diubah_oleh: diubahOleh,
+  };
 
   const response = await fetchWithTimeout(
     `${baseUrl}/tasks/${encodeURIComponent(taskId)}`,
     {
       method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(taskData),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     }
   );
 
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal memperbarui tugas");
@@ -465,17 +497,12 @@ export async function updateTaskStatus(taskId, userId, status) {
     `${baseUrl}/tasks/${encodeURIComponent(taskId)}/status`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        user_id: userId,
-        status,
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: userId, status }),
     }
   );
 
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal memperbarui status pengerjaan");
@@ -484,19 +511,24 @@ export async function updateTaskStatus(taskId, userId, status) {
   return data;
 }
 
-export async function deleteTask(taskId) {
+/**
+ * Hapus tugas (hanya PJMK). userId dikirim lewat query ?oleh=<userId>.
+ * Contoh pemanggilan di dashboard: deleteTask(String(taskId), currentUser.userId)
+ */
+export async function deleteTask(taskId, userId) {
   const baseUrl = getBaseUrl();
 
+  if (!userId) {
+    throw new Error("Identitas pengguna wajib disertakan untuk menghapus tugas.");
+  }
+
   const response = await fetchWithTimeout(
-    `${baseUrl}/tasks/${encodeURIComponent(taskId)}`,
-    {
-      method: "DELETE",
-    }
+    `${baseUrl}/tasks/${encodeURIComponent(taskId)}?oleh=${encodeURIComponent(userId)}`,
+    { method: "DELETE" }
   );
 
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-
+    const data = await parseJson(response);
     throw new Error(data.pesan || "Gagal menghapus tugas");
   }
 
@@ -507,13 +539,10 @@ export async function deleteTask(taskId) {
 // CATATAN PRIBADI (US-08)
 // =====================================================
 
-// Mengambil seluruh catatan milik mahasiswa
 export async function fetchNotes(userId, kelasId) {
   const baseUrl = getBaseUrl();
 
-  const params = new URLSearchParams({
-    userId: String(userId),
-  });
+  const params = new URLSearchParams({ userId: String(userId) });
 
   if (kelasId) {
     params.append("kelasId", kelasId);
@@ -522,8 +551,7 @@ export async function fetchNotes(userId, kelasId) {
   const response = await fetchWithTimeout(
     `${baseUrl}/api/catatan?${params.toString()}`
   );
-
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal mengambil catatan");
@@ -532,22 +560,16 @@ export async function fetchNotes(userId, kelasId) {
   return data;
 }
 
-// Menambahkan catatan baru
 export async function createNote(noteData) {
   const baseUrl = getBaseUrl();
 
-  const response = await fetchWithTimeout(
-    `${baseUrl}/api/catatan`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(noteData),
-    }
-  );
+  const response = await fetchWithTimeout(`${baseUrl}/api/catatan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(noteData),
+  });
 
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal menyimpan catatan");
@@ -556,7 +578,6 @@ export async function createNote(noteData) {
   return data;
 }
 
-// MEMPERBARUI CATATAN YANG SUDAH ADA
 export async function updateNote(noteId, noteData) {
   const baseUrl = getBaseUrl();
 
@@ -564,14 +585,12 @@ export async function updateNote(noteId, noteData) {
     `${baseUrl}/api/catatan/${encodeURIComponent(noteId)}`,
     {
       method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(noteData),
     }
   );
 
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal memperbarui catatan");
@@ -580,20 +599,16 @@ export async function updateNote(noteId, noteData) {
   return data;
 }
 
-// Menghapus catatan
 export async function deleteNote(noteId) {
   const baseUrl = getBaseUrl();
 
   const response = await fetchWithTimeout(
     `${baseUrl}/api/catatan/${encodeURIComponent(noteId)}`,
-    {
-      method: "DELETE",
-    }
+    { method: "DELETE" }
   );
 
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-
+    const data = await parseJson(response);
     throw new Error(data.pesan || "Gagal menghapus catatan");
   }
 
@@ -612,8 +627,7 @@ export async function fetchNotifications(userId) {
     : `${baseUrl}/api/notifications`;
 
   const response = await fetchWithTimeout(url);
-
-  const data = await response.json();
+  const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal mengambil notifikasi");
@@ -627,9 +641,7 @@ export async function markNotificationRead(notifId) {
 
   const response = await fetchWithTimeout(
     `${baseUrl}/api/notifications/${encodeURIComponent(notifId)}/read`,
-    {
-      method: "PUT",
-    }
+    { method: "PUT" }
   );
 
   return response.ok;
@@ -642,12 +654,8 @@ export async function markAllNotificationsRead(userId) {
     `${baseUrl}/api/notifications/read-all`,
     {
       method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userId,
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId }),
     }
   );
 
@@ -662,18 +670,13 @@ export async function checkServerConnection() {
   const baseUrl = getBaseUrl();
 
   try {
-    const res = await fetchWithTimeout(
-      `${baseUrl}/tasks`,
-      {},
-      4000
-    );
+    const res = await fetchWithTimeout(`${baseUrl}/tasks`, {}, 4000);
 
     return {
       ok: res.ok,
       status: res.status,
       url: baseUrl,
     };
-
   } catch (err) {
     return {
       ok: false,

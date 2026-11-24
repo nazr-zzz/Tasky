@@ -6,13 +6,25 @@ import { kirimEmailKode } from "../mailer.js";
 
 const router = express.Router();
 
+// Semester valid: 1-14, boleh kosong (null)
+function parseSemester(nilai) {
+  if (nilai === undefined || nilai === null || String(nilai).trim() === "") {
+    return { ok: true, value: null };
+  }
+  const angka = Number(nilai);
+  if (!Number.isInteger(angka) || angka < 1 || angka > 14) {
+    return { ok: false, value: null };
+  }
+  return { ok: true, value: angka };
+}
+
 // =========================================================================
 // POST /api/auth/register: Pendaftaran Mahasiswa Baru (SRS 6.2)
 // Akun baru dibuat tanpa kelas (0 kelas terdaftar) sampai bergabung via kode
 // =========================================================================
 router.post("/register", async (req, res) => {
   try {
-    const { nama, nim, email, password } = req.body;
+    const { nama, nim, email, password, semester } = req.body;
 
     if (!nama || !nim || !email || !password) {
       return res.status(400).json({
@@ -20,9 +32,20 @@ router.post("/register", async (req, res) => {
       });
     }
 
+    const sem = parseSemester(semester);
+    if (!sem.ok) {
+      return res.status(400).json({
+        pesan: "Semester harus berupa angka 1 sampai 14.",
+      });
+    }
+
+    const nimBersih = String(nim).trim();
+    const emailBersih = String(email).trim().toLowerCase();
+    const namaBersih = String(nama).trim();
+
     const [existingUsers] = await pool.execute(
       "SELECT USER_ID FROM user WHERE NIM = ? OR EMAIL = ?",
-      [nim.trim(), email.trim().toLowerCase()]
+      [nimBersih, emailBersih]
     );
 
     if (existingUsers.length > 0) {
@@ -31,29 +54,24 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(String(password), 10);
     const userId = randomUUID();
 
     await pool.execute(
       `INSERT INTO user
-       (USER_ID, NAMA, NIM, EMAIL, PASSWORD, CREATED_AT)
-       VALUES (?, ?, ?, ?, ?, NOW())`,
-      [
-        userId,
-        nama.trim(),
-        nim.trim(),
-        email.trim().toLowerCase(),
-        hashedPassword,
-      ]
+       (USER_ID, NAMA, NIM, EMAIL, SEMESTER, PASSWORD, CREATED_AT)
+       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+      [userId, namaBersih, nimBersih, emailBersih, sem.value, hashedPassword]
     );
 
     return res.status(201).json({
       pesan: "Registrasi berhasil.",
       user: {
         userId,
-        nama: nama.trim(),
-        nim: nim.trim(),
-        email: email.trim().toLowerCase(),
+        nama: namaBersih,
+        nim: nimBersih,
+        email: emailBersih,
+        semester: sem.value,
       },
     });
   } catch (error) {
@@ -78,11 +96,11 @@ router.post("/login", async (req, res) => {
     }
 
     const [users] = await pool.execute(
-      `SELECT USER_ID, NAMA, NIM, EMAIL, PASSWORD
+      `SELECT USER_ID, NAMA, NIM, EMAIL, SEMESTER, PASSWORD
        FROM user
        WHERE NIM = ? OR EMAIL = ?
        LIMIT 1`,
-      [identitas.trim(), identitas.trim().toLowerCase()]
+      [String(identitas).trim(), String(identitas).trim().toLowerCase()]
     );
 
     if (users.length === 0) {
@@ -97,13 +115,13 @@ router.post("/login", async (req, res) => {
     // Akun lama akan otomatis di-upgrade ke bcrypt hash
     let passwordValid = false;
 
-    if (user.PASSWORD.startsWith("$2")) {
-      passwordValid = await bcrypt.compare(password, user.PASSWORD);
+    if (String(user.PASSWORD).startsWith("$2")) {
+      passwordValid = await bcrypt.compare(String(password), user.PASSWORD);
     } else {
-      passwordValid = password === user.PASSWORD;
+      passwordValid = String(password) === user.PASSWORD;
 
       if (passwordValid) {
-        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPassword = await bcrypt.hash(String(password), 10);
         await pool.execute("UPDATE user SET PASSWORD = ? WHERE USER_ID = ?", [
           hashedPassword,
           user.USER_ID,
@@ -131,6 +149,7 @@ router.post("/login", async (req, res) => {
         nama: user.NAMA,
         nim: user.NIM,
         email: user.EMAIL,
+        semester: user.SEMESTER ?? null,
         role: role,
       },
     });
@@ -148,7 +167,7 @@ router.post("/login", async (req, res) => {
 router.get("/profile/:userId", async (req, res) => {
   try {
     const [users] = await pool.query(
-      `SELECT u.USER_ID, u.NAMA, u.NIM, u.EMAIL, u.CREATED_AT,
+      `SELECT u.USER_ID, u.NAMA, u.NIM, u.EMAIL, u.SEMESTER, u.CREATED_AT,
               (SELECT COUNT(*) FROM ANGGOTA_KELAS ak WHERE ak.USER_ID = u.USER_ID) AS TOTAL_KELAS
        FROM user u
        WHERE u.USER_ID = ?`,
@@ -170,25 +189,45 @@ router.get("/profile/:userId", async (req, res) => {
 // PUT /api/auth/profile/:userId: Perbarui data profil pengguna
 // =========================================================================
 router.put("/profile/:userId", async (req, res) => {
-  const { nama, email, password } = req.body;
+  const { nama, email, password, semester } = req.body;
 
   try {
-    let updateSql = "UPDATE user SET ";
-    const params = [];
     const fields = [];
+    const params = [];
 
-    if (nama && nama.trim().length > 0) {
+    if (nama && String(nama).trim().length > 0) {
       fields.push("NAMA = ?");
-      params.push(nama.trim());
+      params.push(String(nama).trim());
     }
 
-    if (email && email.trim().length > 0) {
+    if (email && String(email).trim().length > 0) {
+      const emailBersih = String(email).trim().toLowerCase();
+
+      const [dupe] = await pool.execute(
+        "SELECT USER_ID FROM user WHERE EMAIL = ? AND USER_ID <> ? LIMIT 1",
+        [emailBersih, req.params.userId]
+      );
+      if (dupe.length > 0) {
+        return res.status(409).json({ pesan: "Email sudah dipakai akun lain." });
+      }
+
       fields.push("EMAIL = ?");
-      params.push(email.trim().toLowerCase());
+      params.push(emailBersih);
     }
 
-    if (password && password.length >= 6) {
-      const hashed = await bcrypt.hash(password, 10);
+    if (semester !== undefined) {
+      const sem = parseSemester(semester);
+      if (!sem.ok) {
+        return res
+          .status(400)
+          .json({ pesan: "Semester harus berupa angka 1 sampai 14." });
+      }
+      fields.push("SEMESTER = ?");
+      params.push(sem.value);
+    }
+
+    if (password && String(password).length >= 6) {
+      const hashed = await bcrypt.hash(String(password), 10);
       fields.push("PASSWORD = ?");
       params.push(hashed);
     }
@@ -197,10 +236,14 @@ router.put("/profile/:userId", async (req, res) => {
       return res.status(400).json({ pesan: "Tidak ada data yang diperbarui" });
     }
 
-    updateSql += fields.join(", ") + " WHERE USER_ID = ?";
+    const updateSql = `UPDATE user SET ${fields.join(", ")} WHERE USER_ID = ?`;
     params.push(req.params.userId);
 
-    await pool.query(updateSql, params);
+    const [hasil] = await pool.execute(updateSql, params);
+
+    if (hasil.affectedRows === 0) {
+      return res.status(404).json({ pesan: "Pengguna tidak ditemukan" });
+    }
 
     res.json({ pesan: "Profil berhasil diperbarui" });
   } catch (error) {
@@ -211,6 +254,7 @@ router.put("/profile/:userId", async (req, res) => {
 
 // =========================================================================
 // POST /api/auth/lupa-password: kirim kode OTP 6 digit ke email terdaftar
+// =========================================================================
 router.post("/lupa-password", async (req, res) => {
   const pesanUmum = "Jika email terdaftar, kode verifikasi telah dikirim.";
 
@@ -276,7 +320,9 @@ router.post("/lupa-password", async (req, res) => {
   }
 });
 
+// =========================================================================
 // POST /api/auth/reset-password: verifikasi kode lalu ganti kata sandi
+// =========================================================================
 router.post("/reset-password", async (req, res) => {
   const pesanSalah = "Kode salah atau sudah kedaluwarsa.";
 

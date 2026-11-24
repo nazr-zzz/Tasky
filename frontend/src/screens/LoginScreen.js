@@ -87,6 +87,7 @@ export default function LoginScreen() {
             nama: userData.nama || userData.NAMA || "",
             nim: userData.nim || userData.NIM || "",
             email: userData.email || userData.EMAIL || email.trim(),
+            semester: String(userData.semester ?? userData.SEMESTER ?? "7"),
             role: userData.role || userData.ROLE || "Mahasiswa",
           },
         });
@@ -303,6 +304,20 @@ export default function LoginScreen() {
             </Text>
           </View>
         </View>
+
+        {/* LINK SWITCH AKUN SESUAI FIGMA */}
+        <TouchableOpacity
+          style={styles.switchAuthLink}
+          onPress={() => setAuthMode(authMode === "daftar" ? "masuk" : "daftar")}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.switchAuthText}>
+            {authMode === "daftar" ? "Sudah punya akun? " : "Belum punya akun? "}
+            <Text style={styles.switchAuthBold}>
+              {authMode === "daftar" ? "Masuk ke Akun" : "Daftar"}
+            </Text>
+          </Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -542,5 +557,19 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: "#475467",
     lineHeight: 16,
+  },
+  switchAuthLink: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 16,
+    marginTop: 8,
+  },
+  switchAuthText: {
+    fontSize: 13,
+    color: "#64748B",
+  },
+  switchAuthBold: {
+    color: "#0047BA",
+    fontWeight: "800",
   },
 });

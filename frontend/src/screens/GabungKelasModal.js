@@ -7,10 +7,9 @@ import {
   StyleSheet,
   Alert,
   ScrollView,
-  SafeAreaView,
-  StatusBar,
   ActivityIndicator,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { joinClass } from "../services/api";
 
 export default function GabungKelasScreen({
@@ -38,10 +37,11 @@ export default function GabungKelasScreen({
       const res = await joinClass(kode, currentUser.userId);
 
       const targetClass = res?.kelas || { kode_kelas: kode };
-      const namaKelas = targetClass.nama_kelas ?? targetClass.NAMA_KELAS ?? targetClass.name;
+      const namaKelas =
+        targetClass.nama_kelas ?? targetClass.NAMA_KELAS ?? targetClass.name;
 
       Alert.alert(
-        "Berhasil Bergabung! 🎉",
+        "Berhasil Bergabung!",
         namaKelas
           ? `Selamat! Anda telah resmi bergabung ke kelas "${namaKelas}".`
           : "Selamat! Anda telah resmi bergabung ke kelas."
@@ -59,12 +59,20 @@ export default function GabungKelasScreen({
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
-
+    <SafeAreaView
+      edges={["top", "left", "right", "bottom"]}
+      style={styles.safeArea}
+    >
       {/* HEADER ATAS */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={onBack}>
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={onBack}
+          activeOpacity={0.7}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 16 }}
+          accessibilityRole="button"
+          accessibilityLabel="Kembali"
+        >
           <Text style={styles.backIcon}>←</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Gabung Kelas</Text>
@@ -78,20 +86,15 @@ export default function GabungKelasScreen({
       <ScrollView
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
-        {/* ILUSTRASI ICON GABUNG KELAS */}
         <View style={styles.heroSection}>
-          <View style={styles.heroCircle}>
-            <Text style={styles.heroIcon}>👥</Text>
-            <View style={styles.heroMiniBadge}>
-              <Text style={styles.heroMiniIcon}>🎓</Text>
-            </View>
+          <View style={styles.heroIconCircle}>
+            <Text style={styles.heroEmoji}>👥🎓</Text>
           </View>
-
           <Text style={styles.heroTitle}>Masukkan Kode Kelas</Text>
           <Text style={styles.heroSubtitle}>
-            Minta 6-8 digit kode kelas unik dari PJMK (Penanggung Jawab Mata
-            Kuliah) Anda untuk mengakses seluruh daftar tugas kelas.
+            Minta 6-8 digit kode kelas unik dari PJMK (Penanggung Jawab Mata Kuliah) Anda untuk mengakses seluruh daftar tugas kelas.
           </Text>
         </View>
 
@@ -99,7 +102,7 @@ export default function GabungKelasScreen({
         <View style={styles.inputCard}>
           <Text style={styles.inputLabel}>KODE KELAS</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.inputPrefix}>🔑</Text>
+            <Text style={styles.inputIcon}>⌨️</Text>
             <TextInput
               style={styles.textInput}
               placeholder="MISAL: TI21-A89K"
@@ -134,23 +137,19 @@ export default function GabungKelasScreen({
                   !kodeKelas.trim() && styles.joinBtnTextDisabled,
                 ]}
               >
-                👥 Gabung
+                Gabung
               </Text>
             )}
           </TouchableOpacity>
         </View>
 
-        {/* FEATURE CARD: TERSINKRONISASI OTOMATIS */}
+        {/* INFO SINKRONISASI */}
         <View style={styles.featureCard}>
-          <View style={styles.featureIconBox}>
-            <Text style={styles.featureIcon}>✨</Text>
-          </View>
+          <Text style={styles.featureIcon}>✨</Text>
           <View style={styles.featureContent}>
             <Text style={styles.featureTitle}>Tersinkronisasi Otomatis</Text>
             <Text style={styles.featureDesc}>
-              Setelah bergabung, Anda akan otomatis menerima semua jadwal tugas
-              kuliah yang dicatat oleh PJMK dan dapat memantau status pengerjaan
-              pribadi Anda.
+              Setelah bergabung, Anda akan otomatis menerima semua jadwal tugas kuliah yang dicatat oleh PJMK dan dapat memantau status pengerjaan pribadi Anda.
             </Text>
           </View>
         </View>
@@ -160,13 +159,13 @@ export default function GabungKelasScreen({
           style={styles.helpLink}
           onPress={() =>
             Alert.alert(
-              "Kontak PJMK",
-              "Hubungi ketua kelas / PJMK mata kuliah Anda di grup WhatsApp kelas untuk mendapatkan kode gabung (misal: TI21-A89K)."
+              "Belum punya kode?",
+              "Hubungi PJMK atau ketua kelas Anda di grup WhatsApp kelas untuk mendapatkan kode gabung."
             )
           }
         >
           <Text style={styles.helpLinkText}>
-            ❓ Belum mendapatkan kode?{" "}
+            ⓘ Belum mendapatkan kode?{" "}
             <Text style={styles.helpLinkBold}>Hubungi PJMK</Text>
           </Text>
         </TouchableOpacity>
@@ -178,22 +177,23 @@ export default function GabungKelasScreen({
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: "#FFFFFF",
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: "#E2E8F0",
     backgroundColor: "#FFFFFF",
   },
   backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#F1F5F9",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -203,14 +203,14 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   headerTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: "800",
     color: "#102A36",
   },
   avatar: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: "#E0EDFE",
     alignItems: "center",
     justifyContent: "center",
@@ -218,47 +218,32 @@ const styles = StyleSheet.create({
     borderColor: "#BAE0FD",
   },
   avatarText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "800",
     color: "#073B82",
   },
   container: {
     paddingHorizontal: 18,
-    paddingTop: 8,
+    paddingTop: 18,
     paddingBottom: 40,
+    backgroundColor: "#F8FAFC",
+    flexGrow: 1,
   },
   heroSection: {
     alignItems: "center",
     marginBottom: 24,
   },
-  heroCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: "#E0EDFE",
+  heroIconCircle: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: "#DBEAFE",
     alignItems: "center",
     justifyContent: "center",
-    position: "relative",
     marginBottom: 14,
   },
-  heroIcon: {
-    fontSize: 34,
-  },
-  heroMiniBadge: {
-    position: "absolute",
-    bottom: -2,
-    right: -2,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#073B82",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
-  },
-  heroMiniIcon: {
-    fontSize: 13,
+  heroEmoji: {
+    fontSize: 28,
   },
   heroTitle: {
     fontSize: 20,
@@ -267,10 +252,10 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   heroSubtitle: {
-    fontSize: 12,
+    fontSize: 13,
     color: "#64748B",
     textAlign: "center",
-    lineHeight: 18,
+    lineHeight: 19,
     paddingHorizontal: 16,
   },
   inputCard: {
@@ -299,8 +284,8 @@ const styles = StyleSheet.create({
     height: 48,
     marginBottom: 6,
   },
-  inputPrefix: {
-    fontSize: 15,
+  inputIcon: {
+    fontSize: 16,
     marginRight: 8,
   },
   textInput: {
@@ -324,7 +309,7 @@ const styles = StyleSheet.create({
     color: "#94A3B8",
   },
   joinBtn: {
-    height: 46,
+    height: 48,
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
@@ -345,43 +330,35 @@ const styles = StyleSheet.create({
   },
   featureCard: {
     flexDirection: "row",
-    backgroundColor: "#F8FAFC",
+    backgroundColor: "#FFFFFF",
     borderRadius: 16,
     padding: 14,
     borderWidth: 1,
     borderColor: "#E2E8F0",
-    alignItems: "flex-start",
     marginBottom: 20,
-  },
-  featureIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: "#E0EDFE",
     alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
   },
   featureIcon: {
-    fontSize: 18,
+    fontSize: 22,
+    marginRight: 12,
   },
   featureContent: {
     flex: 1,
   },
   featureTitle: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "800",
     color: "#102A36",
     marginBottom: 4,
   },
   featureDesc: {
-    fontSize: 11,
+    fontSize: 12,
     color: "#64748B",
-    lineHeight: 16,
+    lineHeight: 17,
   },
   helpLink: {
     alignItems: "center",
-    paddingVertical: 6,
+    paddingVertical: 10,
   },
   helpLinkText: {
     fontSize: 12,

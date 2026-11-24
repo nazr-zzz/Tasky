@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -7,10 +7,9 @@ import {
   StyleSheet,
   Alert,
   ScrollView,
-  SafeAreaView,
-  StatusBar,
   ActivityIndicator,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import { createClass } from "../services/api";
 
@@ -47,21 +46,30 @@ export default function BuatKelasScreen({
     setLoading(true);
     try {
       const generatedCode = buatKodeKelas();
-      const res = await createClass(namaKelas.trim(), generatedCode, currentUser.userId);
+      const res = await createClass(
+        namaKelas.trim(),
+        generatedCode,
+        currentUser.userId
+      );
 
-      // Pakai data dari server; jika server tidak mengirim detail, pakai kode yang baru saja diterima server
+      // Pakai data dari server; jika server tidak mengirim detail, pakai kode yang baru dibuat
       const dariServer = res?.kelas || {};
       const cls = {
         ...dariServer,
-        nama_kelas: dariServer.nama_kelas ?? dariServer.NAMA_KELAS ?? namaKelas.trim(),
-        kode_kelas: dariServer.kode_kelas ?? dariServer.KODE_KELAS ?? generatedCode,
+        nama_kelas:
+          dariServer.nama_kelas ?? dariServer.NAMA_KELAS ?? namaKelas.trim(),
+        kode_kelas:
+          dariServer.kode_kelas ?? dariServer.KODE_KELAS ?? generatedCode,
         kelas_id: dariServer.kelas_id ?? dariServer.KELAS_ID,
       };
 
       setCreatedClass(cls);
       if (onClassCreated) await onClassCreated(cls);
     } catch (e) {
-      Alert.alert("Gagal Membuat Kelas", e?.message || "Tidak dapat terhubung ke server.");
+      Alert.alert(
+        "Gagal Membuat Kelas",
+        e?.message || "Tidak dapat terhubung ke server."
+      );
     } finally {
       setLoading(false);
     }
@@ -71,7 +79,10 @@ export default function BuatKelasScreen({
     if (!createdClass?.kode_kelas) return;
     try {
       await Clipboard.setStringAsync(String(createdClass.kode_kelas));
-      Alert.alert("Disalin! 📋", `Kode kelas ${createdClass.kode_kelas} berhasil disalin ke clipboard.`);
+      Alert.alert(
+        "Disalin!",
+        `Kode kelas ${createdClass.kode_kelas} berhasil disalin ke clipboard.`
+      );
     } catch (e) {
       Alert.alert("Gagal", "Kode kelas tidak dapat disalin.");
     }
@@ -85,18 +96,26 @@ export default function BuatKelasScreen({
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
-
+    <SafeAreaView
+      edges={["top", "left", "right", "bottom"]}
+      style={styles.safeArea}
+    >
       {/* HEADER ATAS */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={onBack}>
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={onBack}
+          activeOpacity={0.7}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 16 }}
+          accessibilityRole="button"
+          accessibilityLabel="Kembali"
+        >
           <Text style={styles.backIcon}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Buat Kelas</Text>
+        <Text style={styles.headerTitle}>Buat Kelas (PJMK)</Text>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>
-            {(currentUser?.nama || "?").charAt(0).toUpperCase()}
+            {(currentUser?.nama || "P").charAt(0).toUpperCase()}
           </Text>
         </View>
       </View>
@@ -104,17 +123,17 @@ export default function BuatKelasScreen({
       <ScrollView
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
-        {/* BANNER PERAN PJMK */}
+        {/* BANNER PERAN PJMK SESUAI FIGMA */}
         <View style={styles.pjmkBanner}>
           <View style={styles.pjmkIconBox}>
-            <Text style={styles.pjmkIcon}>🛡️</Text>
+            <Text style={styles.pjmkShieldIcon}>🛡️</Text>
           </View>
           <View style={styles.pjmkContent}>
             <Text style={styles.pjmkTitle}>Peran: PJMK</Text>
             <Text style={styles.pjmkDesc}>
-              Sebagai pembuat kelas, Anda otomatis menjadi Penanggung Jawab Mata
-              Kuliah untuk mengelola tugas dan deadline kelas ini.
+              Sebagai pembuat kelas, Anda otomatis menjadi Penanggung Jawab Mata Kuliah untuk mengelola tugas dan deadline kelas ini.
             </Text>
           </View>
         </View>
@@ -130,7 +149,7 @@ export default function BuatKelasScreen({
             onChangeText={setNamaKelas}
           />
           <Text style={styles.helperText}>
-            ⓘ Gunakan format mata kuliah dan paralel kelas yang jelas
+            Gunakan format mata kuliah dan paralel kelas yang jelas
           </Text>
 
           <TouchableOpacity
@@ -142,15 +161,12 @@ export default function BuatKelasScreen({
             {loading ? (
               <ActivityIndicator color="#FFFFFF" size="small" />
             ) : (
-              <>
-                <Text style={styles.createBtnIcon}>⊕</Text>
-                <Text style={styles.createBtnText}>Buat Kelas</Text>
-              </>
+              <Text style={styles.createBtnText}>Buat Kelas</Text>
             )}
           </TouchableOpacity>
         </View>
 
-        {/* HASIL KELAS BERHASIL DIBUAT (STATUS PENERBITAN) */}
+        {/* HASIL KELAS BERHASIL DIBUAT */}
         {createdClass && (
           <View style={styles.successSection}>
             <View style={styles.checkCircle}>
@@ -161,14 +177,16 @@ export default function BuatKelasScreen({
             <Text style={styles.successTitle}>Kelas Berhasil Dibuat!</Text>
             <Text style={styles.successSubtitle}>
               Ruang kelas siap digunakan. Mahasiswa dapat mendaftar menggunakan
-              token akses unik di bawah ini.
+              kode akses unik di bawah ini.
             </Text>
 
-            {/* BIG CODE BOX */}
+            {/* KOTAK KODE */}
             <View style={styles.codeBox}>
               <Text style={styles.codeBoxLabel}>KODE KELAS</Text>
               <Text style={styles.codeBoxText}>{createdClass.kode_kelas}</Text>
-              <Text style={styles.codeBoxStatus}>● Aktif untuk Semester Ini</Text>
+              <Text style={styles.codeBoxStatus}>
+                ● Aktif untuk Semester Ini
+              </Text>
             </View>
 
             {/* TOMBOL SALIN & BAGIKAN */}
@@ -178,7 +196,7 @@ export default function BuatKelasScreen({
                 onPress={handleCopyCode}
                 activeOpacity={0.8}
               >
-                <Text style={styles.copyBtnText}>📋 Salin Kode</Text>
+                <Text style={styles.copyBtnText}>Salin Kode</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -186,16 +204,15 @@ export default function BuatKelasScreen({
                 onPress={handleShare}
                 activeOpacity={0.8}
               >
-                <Text style={styles.shareBtnText}>💬 Bagikan Kode</Text>
+                <Text style={styles.shareBtnText}>Bagikan Kode</Text>
               </TouchableOpacity>
             </View>
 
-            {/* TIP BOX */}
+            {/* TIP */}
             <View style={styles.tipBox}>
-              <Text style={styles.tipIcon}>💡</Text>
               <Text style={styles.tipText}>
-                Bagikan kode ini kepada seluruh mahasiswa anggota kelas agar mereka
-                dapat bergabung dan menerima update tugas otomatis.
+                Bagikan kode ini kepada seluruh mahasiswa anggota kelas agar
+                mereka dapat bergabung dan menerima update tugas otomatis.
               </Text>
             </View>
           </View>
@@ -208,22 +225,23 @@ export default function BuatKelasScreen({
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: "#FFFFFF",
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: "#E2E8F0",
     backgroundColor: "#FFFFFF",
   },
   backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#F1F5F9",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -233,14 +251,14 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   headerTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: "800",
     color: "#102A36",
   },
   avatar: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: "#E0EDFE",
     alignItems: "center",
     justifyContent: "center",
@@ -248,14 +266,16 @@ const styles = StyleSheet.create({
     borderColor: "#BAE0FD",
   },
   avatarText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "800",
     color: "#073B82",
   },
   container: {
     paddingHorizontal: 18,
-    paddingTop: 16,
+    paddingTop: 18,
     paddingBottom: 40,
+    backgroundColor: "#F8FAFC",
+    flexGrow: 1,
   },
   pjmkBanner: {
     flexDirection: "row",
@@ -267,18 +287,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     alignItems: "flex-start",
   },
-  pjmkIconBox: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: "#DBEAFE",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  pjmkIcon: {
-    fontSize: 18,
-  },
   pjmkContent: {
     flex: 1,
   },
@@ -289,9 +297,9 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   pjmkDesc: {
-    fontSize: 11,
+    fontSize: 12,
     color: "#3B82F6",
-    lineHeight: 16,
+    lineHeight: 17,
   },
   inputCard: {
     backgroundColor: "#FFFFFF",
@@ -302,77 +310,70 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   inputLabel: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "700",
     color: "#102A36",
     marginBottom: 8,
   },
   textInput: {
-    height: 46,
-    backgroundColor: "#F1F5F9",
-    borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: "#CBD5E1",
+    borderRadius: 12,
     paddingHorizontal: 14,
-    fontSize: 13,
+    paddingVertical: 12,
+    fontSize: 14,
     color: "#102A36",
-    marginBottom: 6,
+    backgroundColor: "#F8FAFC",
   },
   helperText: {
-    fontSize: 11,
+    fontSize: 12,
     color: "#64748B",
-    marginBottom: 14,
+    marginTop: 8,
+    marginBottom: 16,
   },
   createBtn: {
-    flexDirection: "row",
+    backgroundColor: "#0B4A9E",
+    borderRadius: 12,
+    paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#073B82",
-    borderRadius: 12,
-    height: 46,
+    minHeight: 48,
   },
   btnDisabled: {
-    opacity: 0.7,
-  },
-  createBtnIcon: {
-    color: "#FFFFFF",
-    fontSize: 18,
-    marginRight: 6,
-    fontWeight: "bold",
+    opacity: 0.6,
   },
   createBtnText: {
     color: "#FFFFFF",
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "700",
   },
   successSection: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    padding: 20,
     alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    padding: 20,
     borderWidth: 1,
     borderColor: "#E2E8F0",
-    marginBottom: 16,
   },
   checkCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "#DBEAFE",
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "#DCFCE7",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 10,
+    marginBottom: 12,
   },
   checkIcon: {
-    fontSize: 22,
-    fontWeight: "900",
-    color: "#1D4ED8",
+    fontSize: 28,
+    color: "#16A34A",
+    fontWeight: "bold",
   },
   statusLabel: {
-    fontSize: 10,
-    fontWeight: "800",
-    color: "#1E40AF",
-    letterSpacing: 0.8,
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#64748B",
+    letterSpacing: 1,
     marginBottom: 4,
   },
   successTitle: {
@@ -380,94 +381,87 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#102A36",
     marginBottom: 6,
+    textAlign: "center",
   },
   successSubtitle: {
-    fontSize: 12,
+    fontSize: 13,
     color: "#64748B",
     textAlign: "center",
-    lineHeight: 18,
+    lineHeight: 19,
     marginBottom: 16,
   },
   codeBox: {
     width: "100%",
     backgroundColor: "#EFF6FF",
-    borderRadius: 16,
-    padding: 18,
-    alignItems: "center",
     borderWidth: 1,
     borderColor: "#BFDBFE",
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: "center",
     marginBottom: 16,
   },
   codeBoxLabel: {
-    fontSize: 10,
-    fontWeight: "800",
+    fontSize: 11,
+    fontWeight: "700",
     color: "#64748B",
     letterSpacing: 1,
-    marginBottom: 4,
+    marginBottom: 6,
   },
   codeBoxText: {
     fontSize: 32,
-    fontWeight: "900",
-    color: "#073B82",
-    letterSpacing: 2,
-    marginBottom: 6,
+    fontWeight: "800",
+    color: "#0B4A9E",
+    letterSpacing: 6,
   },
   codeBoxStatus: {
-    fontSize: 11,
-    color: "#1E40AF",
+    fontSize: 12,
+    color: "#16A34A",
     fontWeight: "600",
+    marginTop: 6,
   },
   actionBtnRow: {
     flexDirection: "row",
     gap: 10,
     width: "100%",
-    marginBottom: 14,
+    marginBottom: 16,
   },
   copyBtn: {
     flex: 1,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: "#0B4A9E",
     borderRadius: 12,
-    height: 44,
+    paddingVertical: 13,
     alignItems: "center",
+    minHeight: 46,
     justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#CBD5E1",
   },
   copyBtnText: {
-    fontSize: 12,
+    color: "#FFFFFF",
+    fontSize: 14,
     fontWeight: "700",
-    color: "#102A36",
   },
   shareBtn: {
     flex: 1,
-    backgroundColor: "#073B82",
+    backgroundColor: "#EBF3FC",
     borderRadius: 12,
-    height: 44,
+    paddingVertical: 13,
     alignItems: "center",
+    minHeight: 46,
     justifyContent: "center",
   },
   shareBtnText: {
-    fontSize: 12,
+    color: "#0B4A9E",
+    fontSize: 14,
     fontWeight: "700",
-    color: "#FFFFFF",
   },
   tipBox: {
-    flexDirection: "row",
-    backgroundColor: "#F8FAFC",
+    width: "100%",
+    backgroundColor: "#FEF9C3",
     borderRadius: 12,
     padding: 12,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
-    alignItems: "flex-start",
-  },
-  tipIcon: {
-    fontSize: 15,
-    marginRight: 8,
   },
   tipText: {
-    flex: 1,
-    fontSize: 11,
-    color: "#64748B",
-    lineHeight: 16,
+    fontSize: 12,
+    color: "#854D0E",
+    lineHeight: 18,
   },
 });

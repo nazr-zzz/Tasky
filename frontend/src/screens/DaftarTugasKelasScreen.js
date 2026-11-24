@@ -8,8 +8,8 @@ import {
   StatusBar,
   SafeAreaView,
   Alert,
-  Clipboard,
 } from "react-native";
+import * as Clipboard from "expo-clipboard";
 
 export default function DaftarTugasKelasScreen({
   kelas,
@@ -26,7 +26,8 @@ export default function DaftarTugasKelasScreen({
   const isPJMK =
     currentUser?.role?.includes("PJMK") ||
     kelas?.role?.includes("PJMK") ||
-    kelas?.dibuat_oleh === currentUser?.userId;
+    kelas?.isPjmk ||
+    String(kelas?.dibuat_oleh) === String(currentUser?.userId);
 
   const currentClass = kelas || {
     name: "Teknik Informatika 2021 - Reguler A",
@@ -36,20 +37,21 @@ export default function DaftarTugasKelasScreen({
     activeTasks: 3,
   };
 
-  const handleCopyCode = () => {
+  const handleCopyCode = async () => {
     const code = currentClass.code || currentClass.kode_kelas || "TI21-A89K";
-    if (Clipboard && Clipboard.setString) {
-      Clipboard.setString(code);
+    try {
+      await Clipboard.setStringAsync(code);
+      Alert.alert("Disalin! 📋", `Kode kelas "${code}" telah disalin.`);
+    } catch {
+      Alert.alert("Gagal", "Tidak dapat menyalin kode.");
     }
-    Alert.alert("Disalin! 📋", `Kode kelas "${code}" telah disalin.`);
   };
 
-  const matkulList = [
-    "Semua Matkul",
-    "Pemrograman Web",
-    "Basis Data",
-    "Jaringan Komputer",
-  ];
+  // Kategori mata kuliah diambil secara dinamis dari daftar tugas kelas
+  const uniqueSubjects = Array.from(
+    new Set(tasks.map((t) => t.subject).filter(Boolean))
+  );
+  const matkulList = ["Semua Matkul", ...uniqueSubjects];
 
   const filteredTasks = tasks.filter((t) => {
     if (selectedMatkul === "Semua Matkul") return true;
