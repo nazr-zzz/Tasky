@@ -5,13 +5,20 @@ import {
   ScrollView,
   TouchableOpacity,
   StyleSheet,
-  StatusBar,
-  SafeAreaView,
   Alert,
   ActivityIndicator,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
-import { fetchClassMembers, updateMemberRole } from "../services/api";
+import {
+  fetchClassMembers,
+  updateMemberRole,
+  copotPendamping,
+} from "../services/api";
+
+// [REVISI 6] false = jarak atas (jam / status bar) sudah ditangani dashboard.
+// Ubah jadi true HANYA jika di dashboard.tsx TAMBAH_SAFE_AREA_SUBLAYAR diubah jadi false.
+const SAFE_AREA_SENDIRI = false;
 
 // Samakan nilai peran dari server menjadi 3 jenis peran yang dipakai tampilan
 function normalisasiPeran(peran) {
@@ -45,19 +52,30 @@ function mapMember(m, currentUserId) {
   };
 }
 
-export default function AnggotaKelasScreen({ kelas, currentUser, onBack }) {
+export default function AnggotaKelasScreen({
+  kelas,
+  currentUser,
+  onBack,
+  onChanged,
+}) {
+  const insets = useSafeAreaInsets();
+
   const kelasId = kelas?.kelas_id;
   const kodeKelas = kelas?.code || kelas?.kode_kelas || "-";
   const namaKelas = kelas?.name || kelas?.nama_kelas || "Kelas";
 
-  // Hanya PJMK Utama yang boleh mengangkat PJMK Pendamping
+  // [REVISI 5] Hanya PJMK Utama yang boleh mengangkat / mencopot PJMK Pendamping.
+  // kelas.isUtama datang dari dashboard (mapClass); logika lama dipakai sebagai cadangan.
   const isPJMKUtama =
-    !!kelas?.isPjmk && !String(kelas?.role || "").includes("Pendamping");
+    kelas?.isUtama !== undefined
+      ? !!kelas.isUtama
+      : !!kelas?.isPjmk && !String(kelas?.role || "").includes("Pendamping");
 
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [promotingId, setPromotingId] = useState(null);
+  // id anggota yang sedang diproses (angkat / copot), untuk menonaktifkan tombolnya
+  const [busyId, setBusyId] = useState(null);
 
   const loadMembers = async () => {
     setError("");
@@ -82,6 +100,11 @@ export default function AnggotaKelasScreen({ kelas, currentUser, onBack }) {
     loadMembers();
   }, [kelasId]);
 
+  // ---------------------------------------------------------------
+  // ANGKAT jadi PJMK Pendamping
+  // [REVISI 2] Backend menolak (403) jika anggota tsb sudah menjadi PJMK
+  // di kelas / mata kuliah lain. Pesannya ditampilkan apa adanya.
+  // ---------------------------------------------------------------
   const handlePromote = (member) => {
     Alert.alert(
       "Angkat PJMK Pendamping",
@@ -91,10 +114,15 @@ export default function AnggotaKelasScreen({ kelas, currentUser, onBack }) {
         {
           text: "Angkat Sekarang",
           onPress: async () => {
-            setPromotingId(member.id);
+            setBusyId(member.id);
             try {
-              // Kirim ke server dulu, ubah tampilan hanya jika berhasil
-              await updateMemberRole(kelasId, member.id, "PJMK Pendamping");
+              // argumen ke-4 = id PJMK Utama yang sedang login (wajib di backend)
+              await updateMemberRole(
+                kelasId,
+                member.id,
+                "PJMK Pendamping",
+                currentUser?.userId
+              );
               setMembers((prev) =>
                 prev.map((m) =>
                   m.id === member.id
@@ -106,6 +134,7 @@ export default function AnggotaKelasScreen({ kelas, currentUser, onBack }) {
                     : m
                 )
               );
+              if (onChanged) onChanged();
               Alert.alert(
                 "Sukses! 👑",
                 `${member.name} sekarang aktif sebagai PJMK Pendamping.`
@@ -116,7 +145,49 @@ export default function AnggotaKelasScreen({ kelas, currentUser, onBack }) {
                 e?.message || "Tidak dapat terhubung ke server."
               );
             } finally {
-              setPromotingId(null);
+              setBusyId(null);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // ---------------------------------------------------------------
+  // [REVISI 5] COPOT akses PJMK Pendamping -> kembali jadi Mahasiswa
+  // ---------------------------------------------------------------
+  const handleCopot = (member) => {
+    Alert.alert(
+      "Copot PJMK Pendamping",
+      `Copot akses PJMK Pendamping dari "${member.name}"? Perannya akan kembali menjadi Mahasiswa dan tidak bisa lagi menambah atau mengubah tugas kuliah.`,
+      [
+        { text: "Batal", style: "cancel" },
+        {
+          text: "Copot Akses",
+          style: "destructive",
+          onPress: async () => {
+            setBusyId(member.id);
+            try {
+              await copotPendamping(kelasId, member.id, currentUser?.userId);
+              setMembers((prev) =>
+                prev.map((m) =>
+                  m.id === member.id
+                    ? { ...m, role: "Mahasiswa", subText: undefined }
+                    : m
+                )
+              );
+              if (onChanged) onChanged();
+              Alert.alert(
+                "Berhasil",
+                `Akses PJMK Pendamping ${member.name} telah dicopot.`
+              );
+            } catch (e) {
+              Alert.alert(
+                "Gagal Mencopot Akses",
+                e?.message || "Tidak dapat terhubung ke server."
+              );
+            } finally {
+              setBusyId(null);
             }
           },
         },
@@ -135,19 +206,33 @@ export default function AnggotaKelasScreen({ kelas, currentUser, onBack }) {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
-
+    <View
+      style={[
+        styles.safeArea,
+        SAFE_AREA_SENDIRI ? { paddingTop: insets.top } : null,
+      ]}
+    >
       {/* HEADER ATAS */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={onBack}>
+        {/* [REVISI 4] Tombol Kembali besar, mudah ditekan */}
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={onBack}
+          activeOpacity={0.7}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
           <Text style={styles.backIcon}>←</Text>
+          <Text style={styles.backText}>Kembali</Text>
         </TouchableOpacity>
+
         <Text style={styles.headerTitle}>Anggota Kelas</Text>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>
-            {(currentUser?.nama || "?").charAt(0).toUpperCase()}
-          </Text>
+
+        <View style={styles.headerRight}>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>
+              {(currentUser?.nama || "?").charAt(0).toUpperCase()}
+            </Text>
+          </View>
         </View>
       </View>
 
@@ -189,8 +274,9 @@ export default function AnggotaKelasScreen({ kelas, currentUser, onBack }) {
               <Text style={styles.pjmkTitle}>Kewenangan PJMK Utama</Text>
               <Text style={styles.pjmkDesc}>
                 Sebagai PJMK Utama, Anda dapat mengangkat anggota menjadi PJMK
-                Pendamping / Wakil PJMK untuk membantu mengelola tugas dan agenda
-                kuliah.
+                Pendamping untuk membantu mengelola tugas kuliah, dan dapat
+                mencopot aksesnya kapan saja. Satu akun hanya boleh menjadi PJMK
+                di satu mata kuliah.
               </Text>
             </View>
           </View>
@@ -306,17 +392,38 @@ export default function AnggotaKelasScreen({ kelas, currentUser, onBack }) {
                     <TouchableOpacity
                       style={[
                         styles.promoteBtn,
-                        promotingId === member.id && styles.promoteBtnDisabled,
+                        busyId === member.id && styles.btnDisabled,
                       ]}
                       onPress={() => handlePromote(member)}
-                      disabled={promotingId === member.id}
+                      disabled={busyId === member.id}
                       activeOpacity={0.8}
                     >
-                      {promotingId === member.id ? (
+                      {busyId === member.id ? (
                         <ActivityIndicator size="small" color="#1D4ED8" />
                       ) : (
                         <Text style={styles.promoteBtnText}>
                           👥+ Jadikan PJMK Pendamping
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  )}
+
+                  {/* [REVISI 5] TOMBOL COPOT PJMK PENDAMPING (HANYA UNTUK PJMK UTAMA) */}
+                  {isPJMKUtama && member.role === "PJMK Pendamping" && !member.isSelf && (
+                    <TouchableOpacity
+                      style={[
+                        styles.copotBtn,
+                        busyId === member.id && styles.btnDisabled,
+                      ]}
+                      onPress={() => handleCopot(member)}
+                      disabled={busyId === member.id}
+                      activeOpacity={0.8}
+                    >
+                      {busyId === member.id ? (
+                        <ActivityIndicator size="small" color="#B91C1C" />
+                      ) : (
+                        <Text style={styles.copotBtnText}>
+                          ✕ Copot Akses Pendamping
                         </Text>
                       )}
                     </TouchableOpacity>
@@ -329,7 +436,7 @@ export default function AnggotaKelasScreen({ kelas, currentUser, onBack }) {
 
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -342,28 +449,42 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 18,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     backgroundColor: "#FFFFFF",
     borderBottomWidth: 1,
     borderBottomColor: "#E2E8F0",
   },
+  // [REVISI 4] area sentuh besar (minimal 44)
   backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 100,
+    minHeight: 44,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    paddingVertical: 10,
+    paddingRight: 8,
   },
   backIcon: {
     fontSize: 22,
     color: "#102A36",
     fontWeight: "bold",
+    marginRight: 4,
+  },
+  backText: {
+    fontSize: 14,
+    color: "#102A36",
+    fontWeight: "700",
   },
   headerTitle: {
+    flex: 1,
+    textAlign: "center",
     fontSize: 16,
     fontWeight: "800",
     color: "#102A36",
+  },
+  headerRight: {
+    width: 100,
+    alignItems: "flex-end",
   },
   avatar: {
     width: 34,
@@ -671,21 +792,43 @@ const styles = StyleSheet.create({
   promoteBtn: {
     backgroundColor: "#EFF6FF",
     borderRadius: 8,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     alignSelf: "flex-start",
     marginTop: 8,
     borderWidth: 1,
     borderColor: "#BFDBFE",
     minWidth: 60,
+    minHeight: 36,
     alignItems: "center",
-  },
-  promoteBtnDisabled: {
-    opacity: 0.6,
+    justifyContent: "center",
   },
   promoteBtnText: {
     fontSize: 11,
     fontWeight: "700",
     color: "#1D4ED8",
+  },
+  // [REVISI 5] tombol Copot (merah)
+  copotBtn: {
+    backgroundColor: "#FEF2F2",
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignSelf: "flex-start",
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    minWidth: 60,
+    minHeight: 36,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  copotBtnText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#B91C1C",
+  },
+  btnDisabled: {
+    opacity: 0.6,
   },
 });

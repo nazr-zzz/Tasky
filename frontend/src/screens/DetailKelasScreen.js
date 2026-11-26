@@ -1,3 +1,4 @@
+
 import React, { useState } from "react";
 import {
   View,
@@ -95,7 +96,7 @@ export default function DetailKelasScreen({
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.headerBtn}
-          onPress={onBack || (() => router.back())}
+          onPress={onBack || (() => router.replace("/dashboard"))}
           activeOpacity={0.7}
         >
           <Text style={styles.backIcon}>←</Text>
