@@ -8,27 +8,26 @@ const router = Router();
 // HELPER
 // =========================================================================
 
-// Ubah berbagai format deadline menjadi objek Date. Mengembalikan null jika tidak valid.
 function parseDeadline(val) {
   if (!val) return null;
   if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
 
   const str = String(val).trim();
 
-  // Format SQL: YYYY-MM-DD HH:MM[:SS] (dianggap waktu lokal server)
+  // ISO 8601 (dari date picker aplikasi) -> instan waktu yang tepat
+  if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
+    const d = new Date(str);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  // SQL: YYYY-MM-DD HH:MM[:SS]
   let m = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
   if (m) {
     const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
     return isNaN(d.getTime()) ? null : d;
   }
 
-  // Format ISO 8601 (dari date picker aplikasi), contoh 2026-12-01T16:59:00.000Z
-  if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
-    const d = new Date(str);
-    return isNaN(d.getTime()) ? null : d;
-  }
-
-  // Format teks Indonesia: "16 Nov 2026, 23:59 WIB"
+  // Teks Indonesia: "16 Nov 2026, 23:59 WIB"
   const clean = str
     .replace(/^(senin|selasa|rabu|kamis|jumat|sabtu|minggu)[,\s]*/i, "")
     .replace(/[•,]/g, " ")
@@ -54,21 +53,52 @@ function parseDeadline(val) {
   return null;
 }
 
-// Format tanggal untuk teks notifikasi / tampilan
+// Format tampilan selalu dalam WIB
 function formatIndonesianDeadline(dateVal) {
   if (!dateVal) return "";
   const d = new Date(dateVal);
   if (isNaN(d.getTime())) return String(dateVal);
 
-  const months = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
-  const days = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
-  const hours = String(d.getHours()).padStart(2, "0");
-  const mins = String(d.getMinutes()).padStart(2, "0");
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("id-ID", {
+      timeZone: "Asia/Jakarta",
+      weekday: "long",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(d)
+      .map((x) => [x.type, x.value])
+  );
 
-  return `${days[d.getDay()]}, ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()} • ${hours}:${mins} WIB`;
+  return `${p.weekday}, ${p.day} ${p.month} ${p.year} • ${p.hour}:${p.minute} WIB`;
 }
 
-// Peran user di sebuah kelas (null jika bukan anggota)
+// Poin kunci -> JSON string (undefined = tidak dikirim, null = kosong)
+function normalisasiPoin(val) {
+  if (val === undefined) return undefined;
+  let arr = val;
+  if (typeof val === "string") {
+    try {
+      arr = JSON.parse(val);
+    } catch {
+      arr = val.split("\n");
+    }
+  }
+  if (!Array.isArray(arr)) return null;
+  const bersih = arr.map((x) => String(x).trim()).filter(Boolean).slice(0, 20);
+  return bersih.length ? JSON.stringify(bersih) : null;
+}
+
+function teksAtauNull(val) {
+  if (val === undefined) return undefined;
+  const s = String(val ?? "").trim();
+  return s === "" ? null : s;
+}
+
 async function getPeran(kelasId, userId) {
   if (!kelasId || !userId) return null;
   const [rows] = await pool.query(
@@ -78,7 +108,6 @@ async function getPeran(kelasId, userId) {
   return rows.length ? rows[0].PERAN : null;
 }
 
-// PJMK Utama, PJMK Pendamping, atau data lama ("PJMK (Admin Kelas)", "Wakil PJMK")
 const isPjmk = (peran) => {
   const p = String(peran || "").toLowerCase();
   return p.includes("pjmk") || p.includes("wakil");
@@ -86,12 +115,24 @@ const isPjmk = (peran) => {
 
 function tambahFormatTask(r) {
   const valid = r.DEADLINE instanceof Date && !isNaN(r.DEADLINE.getTime());
+  let poinList = [];
+  if (r.POIN_KUNCI) {
+    try {
+      const parsed = JSON.parse(r.POIN_KUNCI);
+      if (Array.isArray(parsed)) poinList = parsed;
+    } catch {
+      poinList = String(r.POIN_KUNCI).split("\n").filter(Boolean);
+    }
+  }
   return {
     ...r,
+    POIN_KUNCI_LIST: poinList,
     DEADLINE_FORMATTED: formatIndonesianDeadline(r.DEADLINE),
     DEADLINE_ISO: valid ? r.DEADLINE.toISOString() : r.DEADLINE ? String(r.DEADLINE) : null,
   };
 }
+
+const KOLOM_DETAIL = `t.DOSEN, t.MODUL, t.POIN_KUNCI, t.LINK_PENGUMPULAN`;
 
 // =========================================================================
 // GET /tasks/stats?userId=...
@@ -145,6 +186,7 @@ router.get("/", async (req, res) => {
       sql = `
         SELECT t.TASK_ID, t.KELAS_ID, t.DIBUAT_OLEH, t.DIUBAH_OLEH, t.JUDUL_TUGAS,
                t.MATA_KULIAH, t.DEADLINE, t.DESKRIPSI, t.UPDATED_AT,
+               ${KOLOM_DETAIL},
                k.NAMA_KELAS, k.KODE_KELAS,
                u.NAMA AS NAMA_PEMBUAT,
                COALESCE(st.STATUS, 'belum dikerjakan') AS STATUS_USER,
@@ -165,6 +207,7 @@ router.get("/", async (req, res) => {
       sql = `
         SELECT t.TASK_ID, t.KELAS_ID, t.DIBUAT_OLEH, t.DIUBAH_OLEH, t.JUDUL_TUGAS,
                t.MATA_KULIAH, t.DEADLINE, t.DESKRIPSI, t.UPDATED_AT,
+               ${KOLOM_DETAIL},
                k.NAMA_KELAS, k.KODE_KELAS
         FROM TASK t
         LEFT JOIN KELAS k ON t.KELAS_ID = k.KELAS_ID
@@ -228,7 +271,10 @@ router.get("/:id", async (req, res) => {
 // POST /tasks  -> tambah tugas (hanya PJMK kelas tsb)
 // =========================================================================
 router.post("/", async (req, res) => {
-  const { task_id, kelas_id, dibuat_oleh, judul_tugas, mata_kuliah, deadline, deskripsi } = req.body;
+  const {
+    task_id, kelas_id, dibuat_oleh, judul_tugas, mata_kuliah, deadline, deskripsi,
+    dosen, modul, poin_kunci, link_pengumpulan,
+  } = req.body;
 
   if (!judul_tugas || !mata_kuliah || !deadline || !kelas_id || !dibuat_oleh) {
     return res.status(400).json({
@@ -244,6 +290,11 @@ router.post("/", async (req, res) => {
   }
 
   const finalTaskId = task_id || randomUUID();
+  const deskripsiBersih = teksAtauNull(deskripsi) ?? null;
+  const dosenBersih = teksAtauNull(dosen) ?? null;
+  const modulBersih = teksAtauNull(modul) ?? null;
+  const linkBersih = teksAtauNull(link_pengumpulan) ?? null;
+  const poinBersih = normalisasiPoin(poin_kunci) ?? null;
 
   try {
     const peran = await getPeran(kelas_id, dibuat_oleh);
@@ -254,8 +305,10 @@ router.post("/", async (req, res) => {
     }
 
     await pool.query(
-      `INSERT INTO TASK (TASK_ID, KELAS_ID, DIBUAT_OLEH, JUDUL_TUGAS, MATA_KULIAH, DEADLINE, DESKRIPSI)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO TASK
+         (TASK_ID, KELAS_ID, DIBUAT_OLEH, JUDUL_TUGAS, MATA_KULIAH, DEADLINE, DESKRIPSI,
+          DOSEN, MODUL, POIN_KUNCI, LINK_PENGUMPULAN)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         finalTaskId,
         kelas_id,
@@ -263,11 +316,14 @@ router.post("/", async (req, res) => {
         judul_tugas.trim(),
         mata_kuliah.trim(),
         deadlineDate,
-        deskripsi ? deskripsi.trim() : null,
+        deskripsiBersih,
+        dosenBersih,
+        modulBersih,
+        poinBersih,
+        linkBersih,
       ]
     );
 
-    // Notifikasi tugas baru ke anggota lain
     try {
       const [members] = await pool.query(
         `SELECT USER_ID FROM ANGGOTA_KELAS WHERE KELAS_ID = ?`,
@@ -295,7 +351,11 @@ router.post("/", async (req, res) => {
       mata_kuliah: mata_kuliah.trim(),
       deadline: deadlineDate.toISOString(),
       deadline_formatted: formatIndonesianDeadline(deadlineDate),
-      deskripsi: deskripsi ? deskripsi.trim() : null,
+      deskripsi: deskripsiBersih,
+      dosen: dosenBersih,
+      modul: modulBersih,
+      poin_kunci: poinBersih ? JSON.parse(poinBersih) : [],
+      link_pengumpulan: linkBersih,
     });
   } catch (e) {
     if (e.code === "ER_DUP_ENTRY") {
@@ -308,19 +368,19 @@ router.post("/", async (req, res) => {
 
 // =========================================================================
 // PUT /tasks/:id  -> ubah tugas / ubah deadline (hanya PJMK kelas tsb)
-// diubah_oleh wajib. Notifikasi hanya dikirim jika deadline berubah.
 // =========================================================================
 router.put("/:id", async (req, res) => {
-  const { diubah_oleh, judul_tugas, mata_kuliah, deadline, deskripsi } = req.body;
+  const {
+    diubah_oleh, judul_tugas, mata_kuliah, deadline, deskripsi,
+    dosen, modul, poin_kunci, link_pengumpulan,
+  } = req.body;
 
   if (!diubah_oleh) {
     return res.status(400).json({ pesan: "diubah_oleh wajib diisi" });
   }
 
   try {
-    const [rows] = await pool.query(`SELECT * FROM TASK WHERE TASK_ID = ? LIMIT 1`, [
-      req.params.id,
-    ]);
+    const [rows] = await pool.query(`SELECT * FROM TASK WHERE TASK_ID = ? LIMIT 1`, [req.params.id]);
     if (rows.length === 0) {
       return res.status(404).json({ pesan: "Data task tidak ditemukan" });
     }
@@ -333,7 +393,6 @@ router.put("/:id", async (req, res) => {
       });
     }
 
-    // Deadline: pakai yang baru jika dikirim, jika tidak pertahankan yang lama
     let deadlineBaru = lama.DEADLINE;
     let deadlineBerubah = false;
 
@@ -357,23 +416,28 @@ router.put("/:id", async (req, res) => {
       mata_kuliah !== undefined && String(mata_kuliah).trim() !== ""
         ? String(mata_kuliah).trim()
         : lama.MATA_KULIAH;
-    const deskBaru =
-      deskripsi !== undefined
-        ? deskripsi && String(deskripsi).trim() !== ""
-          ? String(deskripsi).trim()
-          : null
-        : lama.DESKRIPSI;
 
-    // DEADLINE selalu ditulis eksplisit agar tidak ikut ter-reset otomatis oleh MySQL
+    // Field opsional: undefined = pertahankan, "" = kosongkan
+    const deskBaru = deskripsi !== undefined ? teksAtauNull(deskripsi) : lama.DESKRIPSI;
+    const dosenBaru = dosen !== undefined ? teksAtauNull(dosen) : lama.DOSEN;
+    const modulBaru = modul !== undefined ? teksAtauNull(modul) : lama.MODUL;
+    const linkBaru = link_pengumpulan !== undefined ? teksAtauNull(link_pengumpulan) : lama.LINK_PENGUMPULAN;
+    const poinNorm = normalisasiPoin(poin_kunci);
+    const poinBaru = poinNorm !== undefined ? poinNorm : lama.POIN_KUNCI;
+
     await pool.query(
       `UPDATE TASK
        SET JUDUL_TUGAS = ?, MATA_KULIAH = ?, DEADLINE = ?, DESKRIPSI = ?,
+           DOSEN = ?, MODUL = ?, POIN_KUNCI = ?, LINK_PENGUMPULAN = ?,
            DIUBAH_OLEH = ?, UPDATED_AT = NOW()
        WHERE TASK_ID = ?`,
-      [judulBaru, mkBaru, deadlineBaru, deskBaru, diubah_oleh, req.params.id]
+      [
+        judulBaru, mkBaru, deadlineBaru, deskBaru,
+        dosenBaru, modulBaru, poinBaru, linkBaru,
+        diubah_oleh, req.params.id,
+      ]
     );
 
-    // Notifikasi hanya jika deadline berubah
     if (deadlineBerubah) {
       try {
         const [members] = await pool.query(
@@ -404,6 +468,10 @@ router.put("/:id", async (req, res) => {
       deadline: new Date(deadlineBaru).toISOString(),
       deadline_formatted: formatIndonesianDeadline(deadlineBaru),
       deskripsi: deskBaru,
+      dosen: dosenBaru,
+      modul: modulBaru,
+      poin_kunci: poinBaru ? JSON.parse(poinBaru) : [],
+      link_pengumpulan: linkBaru,
       deadline_berubah: deadlineBerubah,
     });
   } catch (e) {
@@ -413,8 +481,7 @@ router.put("/:id", async (req, res) => {
 });
 
 // =========================================================================
-// POST /tasks/:id/status  -> ubah status pengerjaan milik user
-// body: { user_id, status }
+// POST /tasks/:id/status
 // =========================================================================
 router.post("/:id/status", async (req, res) => {
   const { user_id, status } = req.body;
@@ -424,10 +491,7 @@ router.post("/:id/status", async (req, res) => {
   }
 
   try {
-    const [rows] = await pool.query(
-      `SELECT KELAS_ID FROM TASK WHERE TASK_ID = ? LIMIT 1`,
-      [req.params.id]
-    );
+    const [rows] = await pool.query(`SELECT KELAS_ID FROM TASK WHERE TASK_ID = ? LIMIT 1`, [req.params.id]);
     if (rows.length === 0) {
       return res.status(404).json({ pesan: "Data task tidak ditemukan" });
     }
@@ -469,7 +533,7 @@ router.post("/:id/status", async (req, res) => {
 });
 
 // =========================================================================
-// DELETE /tasks/:id?oleh=<userId>  -> hapus tugas (hanya PJMK kelas tsb)
+// DELETE /tasks/:id?oleh=<userId>
 // =========================================================================
 router.delete("/:id", async (req, res) => {
   const oleh = req.query.oleh;
@@ -480,10 +544,7 @@ router.delete("/:id", async (req, res) => {
 
   let conn;
   try {
-    const [rows] = await pool.query(
-      `SELECT KELAS_ID FROM TASK WHERE TASK_ID = ? LIMIT 1`,
-      [req.params.id]
-    );
+    const [rows] = await pool.query(`SELECT KELAS_ID FROM TASK WHERE TASK_ID = ? LIMIT 1`, [req.params.id]);
     if (rows.length === 0) {
       return res.status(404).json({ pesan: "Data task tidak ditemukan" });
     }
@@ -498,7 +559,6 @@ router.delete("/:id", async (req, res) => {
     conn = await pool.getConnection();
     await conn.beginTransaction();
 
-    // Hapus data turunan dulu agar tidak terhalang foreign key
     await conn.query(`DELETE FROM NOTIFICATION WHERE TASK_ID = ?`, [req.params.id]);
     await conn.query(`DELETE FROM STATUS_TUGAS WHERE TASK_ID = ?`, [req.params.id]);
     await conn.query(`DELETE FROM TASK WHERE TASK_ID = ?`, [req.params.id]);

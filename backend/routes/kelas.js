@@ -19,6 +19,24 @@ async function getPeran(kelasId, userId) {
 }
 
 const isUtama = (peran) => String(peran || "").toLowerCase().includes("pjmk utama");
+const isPendamping = (peran) => String(peran || "").toLowerCase().includes("pjmk pendamping");
+
+// [REVISI 2] Cek apakah user sudah jadi PJMK Utama / Pendamping di kelas LAIN.
+// Mengembalikan { KELAS_ID, NAMA_KELAS, PERAN } atau null jika belum.
+// kelasIdPengecualian = kelas yang sedang diproses (diabaikan dari pengecekan)
+async function cariPeranPjmkLain(userId, kelasIdPengecualian = null) {
+  const [rows] = await pool.query(
+    `SELECT ak.KELAS_ID, k.NAMA_KELAS, ak.PERAN
+     FROM ANGGOTA_KELAS ak
+     JOIN KELAS k ON k.KELAS_ID = ak.KELAS_ID
+     WHERE ak.USER_ID = ?
+       AND (ak.PERAN LIKE '%PJMK Utama%' OR ak.PERAN LIKE '%PJMK Pendamping%')
+       AND (? IS NULL OR ak.KELAS_ID <> ?)
+     LIMIT 1`,
+    [userId, kelasIdPengecualian, kelasIdPengecualian]
+  );
+  return rows.length ? rows[0] : null;
+}
 
 // Buat kode kelas unik 6 karakter
 async function buatKodeUnik(kodeUsulan) {
@@ -72,6 +90,30 @@ router.get("/", async (req, res) => {
   } catch (e) {
     console.error("Gagal mengambil daftar kelas:", e);
     res.status(500).json({ pesan: "Gagal mengambil daftar kelas", error: e.message });
+  }
+});
+
+// =========================================================================
+// [REVISI 2] GET /api/kelas/pjmk-status/:userId
+// Cek apakah user sudah menjadi PJMK (Utama/Pendamping) di salah satu kelas.
+// Harus diletakkan SEBELUM "/:id".
+// Response: { sudah_pjmk: boolean, kelas_id, nama_kelas, peran }
+// =========================================================================
+router.get("/pjmk-status/:userId", async (req, res) => {
+  try {
+    const data = await cariPeranPjmkLain(req.params.userId, null);
+    if (!data) {
+      return res.json({ sudah_pjmk: false });
+    }
+    res.json({
+      sudah_pjmk: true,
+      kelas_id: data.KELAS_ID,
+      nama_kelas: data.NAMA_KELAS,
+      peran: data.PERAN,
+    });
+  } catch (e) {
+    console.error("Gagal cek status PJMK:", e);
+    res.status(500).json({ pesan: "Gagal cek status PJMK", error: e.message });
   }
 });
 
@@ -131,6 +173,7 @@ router.get("/:id", async (req, res) => {
 // =========================================================================
 // POST /api/kelas -> buat kelas baru
 // - Nama kelas tidak boleh sama dengan kelas yang sudah ada (409)
+// - [REVISI 2] User yang sudah jadi PJMK di kelas lain tidak boleh membuat kelas (403)
 // - Pembuat otomatis menjadi PJMK Utama
 // =========================================================================
 router.post("/", async (req, res) => {
@@ -151,6 +194,16 @@ router.post("/", async (req, res) => {
     );
     if (userRows.length === 0) {
       return res.status(404).json({ pesan: "Akun tidak ditemukan. Silakan login ulang." });
+    }
+
+    // [REVISI 2] Satu orang hanya boleh jadi PJMK di satu mata kuliah
+    const pjmkLain = await cariPeranPjmkLain(dibuat_oleh, null);
+    if (pjmkLain) {
+      return res.status(403).json({
+        pesan:
+          `Anda sudah menjadi ${pjmkLain.PERAN} di kelas "${pjmkLain.NAMA_KELAS}". ` +
+          "Satu akun hanya boleh menjadi PJMK di satu mata kuliah.",
+      });
     }
 
     // Tolak nama kelas ganda (tanpa membedakan huruf besar/kecil dan spasi ganda)
@@ -204,7 +257,7 @@ router.post("/", async (req, res) => {
 });
 
 // =========================================================================
-// POST /api/kelas/join -> gabung kelas dengan kode
+// POST /api/kelas/join -> gabung kelas dengan kode (sebagai Mahasiswa)
 // =========================================================================
 router.post("/join", async (req, res) => {
   const { kode_kelas, user_id, userId } = req.body;
@@ -264,6 +317,8 @@ router.post("/join", async (req, res) => {
 // =========================================================================
 // PUT /api/kelas/:id/anggota/:userId/peran
 // Hanya PJMK Utama. Body: { peran, oleh }
+// [REVISI 2] Menjadikan PJMK Pendamping ditolak jika anggota tsb sudah
+//            menjadi PJMK Utama/Pendamping di kelas lain.
 // =========================================================================
 router.put("/:id/anggota/:userId/peran", async (req, res) => {
   const { peran, oleh } = req.body;
@@ -293,6 +348,18 @@ router.put("/:id/anggota/:userId/peran", async (req, res) => {
       return res.status(400).json({ pesan: "Peran PJMK Utama tidak dapat diubah." });
     }
 
+    // [REVISI 2] Cek PJMK di kelas lain hanya saat akan dijadikan pendamping
+    if (peran === PERAN_PENDAMPING) {
+      const pjmkLain = await cariPeranPjmkLain(userId, id);
+      if (pjmkLain) {
+        return res.status(403).json({
+          pesan:
+            `Anggota ini sudah menjadi ${pjmkLain.PERAN} di kelas "${pjmkLain.NAMA_KELAS}". ` +
+            "Satu akun hanya boleh menjadi PJMK di satu mata kuliah.",
+        });
+      }
+    }
+
     await pool.query(
       `UPDATE ANGGOTA_KELAS SET PERAN = ? WHERE KELAS_ID = ? AND USER_ID = ?`,
       [peran, id, userId]
@@ -320,6 +387,67 @@ router.put("/:id/anggota/:userId/peran", async (req, res) => {
   } catch (e) {
     console.error("Gagal mengubah peran anggota:", e);
     res.status(500).json({ pesan: "Gagal mengubah peran", error: e.message });
+  }
+});
+
+// =========================================================================
+// [REVISI 5] PUT /api/kelas/:id/anggota/:userId/copot
+// Mencopot akses PJMK Pendamping -> peran kembali menjadi Mahasiswa.
+// Hanya PJMK Utama. Body: { oleh }
+// =========================================================================
+router.put("/:id/anggota/:userId/copot", async (req, res) => {
+  const { id, userId } = req.params;
+  const oleh = req.body?.oleh || req.query.oleh;
+
+  if (!oleh) {
+    return res.status(400).json({ pesan: "oleh (id PJMK Utama) wajib diisi" });
+  }
+
+  try {
+    const peranPengubah = await getPeran(id, oleh);
+    if (!isUtama(peranPengubah)) {
+      return res.status(403).json({
+        pesan: "Hanya PJMK Utama yang dapat mencopot akses PJMK Pendamping.",
+      });
+    }
+
+    const peranTarget = await getPeran(id, userId);
+    if (!peranTarget) {
+      return res.status(404).json({ pesan: "Anggota kelas tidak ditemukan" });
+    }
+    if (isUtama(peranTarget)) {
+      return res.status(400).json({ pesan: "PJMK Utama tidak dapat dicopot." });
+    }
+    if (!isPendamping(peranTarget)) {
+      return res.status(400).json({ pesan: "Anggota ini bukan PJMK Pendamping." });
+    }
+
+    await pool.query(
+      `UPDATE ANGGOTA_KELAS SET PERAN = ? WHERE KELAS_ID = ? AND USER_ID = ?`,
+      [PERAN_MHS, id, userId]
+    );
+
+    // Notifikasi ke anggota yang dicopot
+    try {
+      const [kRows] = await pool.query(`SELECT NAMA_KELAS FROM KELAS WHERE KELAS_ID = ?`, [id]);
+      const namaKelas = kRows[0]?.NAMA_KELAS || "Kelas";
+      await pool.query(
+        `INSERT INTO NOTIFICATION (NOTIF_ID, TASK_ID, USER_ID, JENIS, PESAN, WAKTU_KIRIM, IS_READ)
+         VALUES (?, NULL, ?, 'info', ?, NOW(), 0)`,
+        [
+          randomUUID(),
+          userId,
+          `Akses ${PERAN_PENDAMPING} Anda di kelas "${namaKelas}" telah dicabut oleh ${PERAN_UTAMA}. Peran Anda kini ${PERAN_MHS}.`,
+        ]
+      );
+    } catch (notifErr) {
+      console.warn("Gagal membuat notifikasi pencopotan:", notifErr.message);
+    }
+
+    res.json({ pesan: "Akses PJMK Pendamping berhasil dicopot", peran: PERAN_MHS });
+  } catch (e) {
+    console.error("Gagal mencopot PJMK Pendamping:", e);
+    res.status(500).json({ pesan: "Gagal mencopot PJMK Pendamping", error: e.message });
   }
 });
 

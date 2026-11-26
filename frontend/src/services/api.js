@@ -184,7 +184,7 @@ export async function fetchProfile(userId) {
   return data;
 }
 
-// profileData: { nama?, email?, password?, semester? }
+// profileData: { nama?, nim?, email?, password?, semester? }
 export async function updateProfile(userId, profileData) {
   const baseUrl = getBaseUrl();
 
@@ -278,6 +278,26 @@ export async function fetchClassDetail(kelasId) {
   return data;
 }
 
+/**
+ * [REVISI 2] Cek apakah user sudah menjadi PJMK (Utama/Pendamping) di suatu kelas.
+ * Return: { sudah_pjmk: boolean, kelas_id?, nama_kelas?, peran? }
+ * Dipakai untuk menyembunyikan / menolak tombol "Buat Kelas".
+ */
+export async function getPjmkStatus(userId) {
+  const baseUrl = getBaseUrl();
+
+  const response = await fetchWithTimeout(
+    `${baseUrl}/api/kelas/pjmk-status/${encodeURIComponent(userId)}`
+  );
+  const data = await parseJson(response);
+
+  if (!response.ok) {
+    throw new Error(data.pesan || "Gagal memeriksa status PJMK");
+  }
+
+  return data;
+}
+
 export async function createClass(nama_kelas, kode_kelas, dibuat_oleh) {
   const baseUrl = getBaseUrl();
 
@@ -290,6 +310,7 @@ export async function createClass(nama_kelas, kode_kelas, dibuat_oleh) {
   const data = await parseJson(response);
 
   if (!response.ok) {
+    // Termasuk pesan 403 jika user sudah jadi PJMK di kelas lain
     throw new Error(data.pesan || "Gagal membuat kelas");
   }
 
@@ -329,15 +350,25 @@ export async function fetchClassMembers(kelasId) {
   return data;
 }
 
-export async function updateMemberRole(kelasId, userId, peran) {
+/**
+ * Ubah peran anggota (hanya PJMK Utama).
+ * peran: "PJMK Pendamping" atau "Mahasiswa"
+ * oleh : userId PJMK Utama yang sedang login (WAJIB, dicek backend)
+ * Contoh: updateMemberRole(kelasId, anggota.USER_ID, "PJMK Pendamping", currentUser.userId)
+ */
+export async function updateMemberRole(kelasId, userId, peran, oleh) {
   const baseUrl = getBaseUrl();
+
+  if (!oleh) {
+    throw new Error("Identitas pengguna (oleh) wajib disertakan.");
+  }
 
   const response = await fetchWithTimeout(
     `${baseUrl}/api/kelas/${encodeURIComponent(kelasId)}/anggota/${encodeURIComponent(userId)}/peran`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ peran }),
+      body: JSON.stringify({ peran, oleh }),
     }
   );
 
@@ -350,11 +381,48 @@ export async function updateMemberRole(kelasId, userId, peran) {
   return data;
 }
 
-export async function leaveClass(kelasId, userId) {
+/**
+ * [REVISI 5] Copot akses PJMK Pendamping (hanya PJMK Utama).
+ * Peran anggota kembali menjadi Mahasiswa.
+ * Contoh: copotPendamping(kelasId, anggota.USER_ID, currentUser.userId)
+ */
+export async function copotPendamping(kelasId, userId, oleh) {
   const baseUrl = getBaseUrl();
 
+  if (!oleh) {
+    throw new Error("Identitas PJMK Utama (oleh) wajib disertakan.");
+  }
+
   const response = await fetchWithTimeout(
-    `${baseUrl}/api/kelas/${encodeURIComponent(kelasId)}/anggota/${encodeURIComponent(userId)}`,
+    `${baseUrl}/api/kelas/${encodeURIComponent(kelasId)}/anggota/${encodeURIComponent(userId)}/copot`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ oleh }),
+    }
+  );
+
+  const data = await parseJson(response);
+
+  if (!response.ok) {
+    throw new Error(data.pesan || "Gagal mencopot PJMK Pendamping");
+  }
+
+  return data;
+}
+
+/**
+ * Keluar dari kelas, atau mengeluarkan anggota (oleh PJMK Utama).
+ * - Keluar sendiri : leaveClass(kelasId, currentUser.userId)
+ * - Mengeluarkan   : leaveClass(kelasId, anggota.USER_ID, currentUser.userId)
+ */
+export async function leaveClass(kelasId, userId, oleh) {
+  const baseUrl = getBaseUrl();
+
+  const pelaku = oleh || userId;
+
+  const response = await fetchWithTimeout(
+    `${baseUrl}/api/kelas/${encodeURIComponent(kelasId)}/anggota/${encodeURIComponent(userId)}?oleh=${encodeURIComponent(pelaku)}`,
     { method: "DELETE" }
   );
 
@@ -367,11 +435,19 @@ export async function leaveClass(kelasId, userId) {
   return data;
 }
 
-export async function deleteClass(kelasId) {
+/**
+ * Hapus kelas (hanya PJMK Utama). oleh = userId yang sedang login.
+ * Contoh: deleteClass(kelasId, currentUser.userId)
+ */
+export async function deleteClass(kelasId, oleh) {
   const baseUrl = getBaseUrl();
 
+  if (!oleh) {
+    throw new Error("Identitas pengguna (oleh) wajib disertakan untuk menghapus kelas.");
+  }
+
   const response = await fetchWithTimeout(
-    `${baseUrl}/api/kelas/${encodeURIComponent(kelasId)}`,
+    `${baseUrl}/api/kelas/${encodeURIComponent(kelasId)}?oleh=${encodeURIComponent(oleh)}`,
     { method: "DELETE" }
   );
 
@@ -429,6 +505,7 @@ export async function fetchTaskStats(userId) {
  * Tambah tugas (hanya PJMK).
  * taskData wajib berisi: dibuat_oleh (userId) dan kelas_id.
  * deadline boleh berupa Date atau string ISO.
+ * deskripsi (teks bebas per tugas) ikut terkirim apa adanya.
  */
 export async function createTask(taskData) {
   const baseUrl = getBaseUrl();

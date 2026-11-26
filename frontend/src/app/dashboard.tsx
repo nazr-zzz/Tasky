@@ -12,6 +12,7 @@ import {
   Modal,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
 import { useLocalSearchParams, router } from "expo-router";
 import * as Notifications from "expo-notifications";
 import * as Clipboard from "expo-clipboard";
@@ -33,6 +34,8 @@ import {
   deleteTask,
   fetchClasses,
   fetchNotifications,
+  fetchProfile,
+  getPjmkStatus,
   checkServerConnection,
   setCustomBaseUrl,
   CURRENT_LAN_IP,
@@ -50,6 +53,11 @@ const UbahDeadlineComp: any = UbahDeadlineModal;
 const CatatanComp: any = CatatanScreen;
 const NotifikasiComp: any = NotifikasiScreen;
 const ProfilComp: any = ProfilScreen;
+
+// [REVISI 6] true = dashboard menambahkan jarak atas (jam/status bar) untuk semua sub-layar.
+// Kalau setelah dicoba jaraknya jadi DOBEL (karena sub-layar sudah memakai SafeAreaView
+// sendiri), ubah menjadi false.
+const TAMBAH_SAFE_AREA_SUBLAYAR = true;
 
 const COLORS = {
   background: "#F8FAFC",
@@ -74,6 +82,7 @@ const COLORS = {
 
 const asString = (v: any): string => (typeof v === "string" ? v : "");
 
+// Hitung mundur sesuai tenggat yang diinput PJMK (jam & menit ikut dihitung)
 function hitungCountdown(deadline?: any): string {
   if (!deadline) return "";
   const d = new Date(deadline);
@@ -82,7 +91,25 @@ function hitungCountdown(deadline?: any): string {
   if (diff <= 0) return "Lewat deadline";
   const hari = Math.floor(diff / 86400000);
   const jam = Math.floor((diff % 86400000) / 3600000);
-  return hari > 0 ? `${hari} Hari ${jam} Jam` : `${jam} Jam`;
+  const menit = Math.floor((diff % 3600000) / 60000);
+  if (hari > 0) return `${hari} Hari ${jam} Jam`;
+  if (jam > 0) return `${jam} Jam ${menit} Menit`;
+  return `${menit} Menit`;
+}
+
+// [REVISI 4/7] Label "H-n" berdasarkan selisih hari kalender sebenarnya
+function hitungLabelHari(deadline?: any): string {
+  if (!deadline) return "";
+  const d = new Date(deadline);
+  if (isNaN(d.getTime())) return "";
+  const awalHariIni = new Date();
+  awalHariIni.setHours(0, 0, 0, 0);
+  const awalDeadline = new Date(d);
+  awalDeadline.setHours(0, 0, 0, 0);
+  const selisih = Math.round((awalDeadline.getTime() - awalHariIni.getTime()) / 86400000);
+  if (d.getTime() < Date.now()) return "Lewat";
+  if (selisih <= 0) return "Hari ini";
+  return `H-${selisih}`;
 }
 
 function formatDeadline(deadline?: any): string {
@@ -102,13 +129,45 @@ function formatDeadline(deadline?: any): string {
   }
 }
 
+// Tanggal saja (untuk kotak tanggal di kalender deadline)
+function formatTanggalSaja(deadline?: any): string {
+  if (!deadline) return "-";
+  const d = new Date(deadline);
+  if (isNaN(d.getTime())) return "-";
+  try {
+    return d.toLocaleDateString("id-ID", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  } catch {
+    return d.toLocaleDateString();
+  }
+}
+
+function formatJamSaja(deadline?: any): string {
+  if (!deadline) return "";
+  const d = new Date(deadline);
+  if (isNaN(d.getTime())) return "";
+  try {
+    return d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return d.toLocaleTimeString();
+  }
+}
+
 function mapClass(c: any, userId: string) {
   const kelasId = c.KELAS_ID ?? c.kelas_id;
   const kode = c.KODE_KELAS ?? c.kode_kelas;
   const nama = c.NAMA_KELAS ?? c.nama_kelas;
   const peran: string = c.PERAN ?? c.peran ?? "";
+  const peranLower = peran.toLowerCase();
   const pembuat = String(c.DIBUAT_OLEH ?? c.dibuat_oleh ?? "") === String(userId);
-  const isPjmk = peran.includes("PJMK") || pembuat;
+
+  // [REVISI 2/5] bedakan PJMK Utama, PJMK Pendamping, dan Mahasiswa
+  const isUtama = peranLower.includes("pjmk utama") || pembuat;
+  const isPendamping = !isUtama && peranLower.includes("pendamping");
+  const isPjmk = isUtama || isPendamping || peranLower.includes("pjmk");
 
   return {
     kelas_id: kelasId,
@@ -116,12 +175,17 @@ function mapClass(c: any, userId: string) {
     code: kode,
     name: nama,
     nama_kelas: nama,
-    room: c.RUANGAN ?? c.ruangan ?? "Fakultas MIPA • Universitas Udayana",
-    role: peran || (pembuat ? "PJMK (Admin Kelas)" : "Mahasiswa"),
+    room: c.RUANGAN ?? c.ruangan ?? "",
+    role: isUtama
+      ? "PJMK Utama"
+      : isPendamping
+      ? "PJMK Pendamping"
+      : peran || "Mahasiswa",
+    isUtama,
+    isPendamping,
     isPjmk,
-    matkulCount: c.JUMLAH_MATKUL ?? c.jumlah_matkul ?? 3,
     activeTasks: c.JUMLAH_TUGAS ?? c.jumlah_tugas ?? 0,
-    members: c.JUMLAH_ANGGOTA ?? c.jumlah_anggota ?? 48,
+    members: c.JUMLAH_ANGGOTA ?? c.jumlah_anggota ?? 0,
     urgent: false,
   };
 }
@@ -156,14 +220,41 @@ export default function Dashboard() {
   const params = useLocalSearchParams();
   const insets = useSafeAreaInsets();
 
+  // [REVISI 3/10] Data profil disimpan di state: tidak ada lagi NIM / semester bawaan Figma,
+  // dan bisa diperbarui setelah edit profil atau dari data server.
+  const [profil, setProfil] = useState({
+    nama: asString(params.nama) || "Mahasiswa",
+    nim: asString(params.nim),
+    email: asString(params.email),
+    semester: asString(params.semester),
+  });
+
   const currentUser = {
     userId: asString(params.userId),
-    nama: asString(params.nama) || "Mahasiswa",
-    nim: asString(params.nim) || "2108561042",
-    email: asString(params.email),
-    semester: asString(params.semester) || "7",
+    nama: profil.nama,
+    nim: profil.nim,
+    email: profil.email,
+    semester: profil.semester,
     role: asString(params.role) || "Mahasiswa",
   };
+
+  // Terapkan data profil dari server / hasil edit (mendukung huruf besar & kecil)
+  const terapkanProfil = useCallback((data: any) => {
+    const src = data?.user ?? data?.data ?? data?.profil ?? data;
+    if (!src || typeof src !== "object") return;
+    const ambil = (...keys: string[]) => {
+      for (const k of keys) {
+        if (src[k] !== undefined && src[k] !== null && src[k] !== "") return String(src[k]);
+      }
+      return undefined;
+    };
+    setProfil((prev) => ({
+      nama: ambil("NAMA", "nama") ?? prev.nama,
+      nim: ambil("NIM", "nim") ?? prev.nim,
+      email: ambil("EMAIL", "email") ?? prev.email,
+      semester: ambil("SEMESTER", "semester") ?? prev.semester,
+    }));
+  }, []);
 
   const [activeTab, setActiveTab] = useState<string>("beranda");
   const [subView, setSubView] = useState<string | null>(null);
@@ -189,10 +280,29 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string>("");
 
+  // Boleh menambah tugas: PJMK Utama / Pendamping di salah satu kelas
   const isPjmkAnyClass =
     classList.some((c) => c.isPjmk) ||
     currentUser.role?.includes("PJMK") ||
     currentUser.role?.toLowerCase() === "admin";
+
+  // [REVISI 2] Sudah jadi PJMK di satu kelas -> tidak boleh membuat kelas lagi
+  const kelasPjmkSaya = classList.find((c) => c.isUtama || c.isPendamping);
+  const sudahPjmk = !!kelasPjmkSaya;
+
+  // [REVISI 6] Pembungkus jarak atas untuk sub-layar agar tidak menabrak jam / status bar
+  const bungkus = (node: React.ReactNode) =>
+    TAMBAH_SAFE_AREA_SUBLAYAR ? (
+      <View style={{ flex: 1, backgroundColor: COLORS.cardBg, paddingTop: insets.top }}>
+        <StatusBar style="dark" />
+        {node}
+      </View>
+    ) : (
+      <>
+        <StatusBar style="dark" />
+        {node}
+      </>
+    );
 
   useEffect(() => {
     const onBackPress = () => {
@@ -228,7 +338,21 @@ export default function Dashboard() {
         setActiveTab("beranda");
         return true;
       }
-      return false;
+
+      // Cegah tombol back Android langsung melempar pengguna ke login/registrasi
+      Alert.alert(
+        "Keluar Aplikasi",
+        "Apakah Anda yakin ingin keluar dari akun?",
+        [
+          { text: "Batal", style: "cancel" },
+          {
+            text: "Keluar",
+            style: "destructive",
+            onPress: () => router.replace("/"),
+          },
+        ]
+      );
+      return true;
     };
 
     const subscription = BackHandler.addEventListener("hardwareBackPress", onBackPress);
@@ -270,16 +394,28 @@ export default function Dashboard() {
     }
   }, [currentUser.userId]);
 
+  // [REVISI 3] Ambil data profil terbaru dari server (NIM, semester, dll.)
+  useEffect(() => {
+    if (!currentUser.userId) return;
+    (async () => {
+      try {
+        const data = await fetchProfile(currentUser.userId);
+        terapkanProfil(data);
+      } catch {}
+    })();
+  }, [currentUser.userId, terapkanProfil]);
+
+  // [REVISI 1] Teks status koneksi: online / tidak terhubung (tanpa "Mode Offline")
   const verifyConnection = useCallback(async () => {
     try {
       const conn = await checkServerConnection();
       if (conn.ok) {
-        setServerStatus(`Terhubung ke Server (${conn.url})`);
+        setServerStatus(`Online - Terhubung ke Server (${conn.url})`);
       } else {
-        setServerStatus(`Mode Offline / Terputus (${conn.url})`);
+        setServerStatus(`Server tidak terjangkau (${conn.url})`);
       }
     } catch {
-      setServerStatus("Mode Offline");
+      setServerStatus("Server tidak terjangkau");
     }
   }, []);
 
@@ -324,6 +460,31 @@ export default function Dashboard() {
     verifyConnection();
   }, [currentUser.userId, loadData, verifyConnection]);
 
+  // [REVISI 5] Setelah daftar kelas diperbarui (misal peran berubah / dicopot),
+  // sinkronkan kelas yang sedang dibuka. Jika kelas sudah tidak ada, kembali ke beranda.
+  useEffect(() => {
+    if (!selectedClass || loading) return;
+    const fresh = classList.find(
+      (c) => String(c.kelas_id) === String(selectedClass.kelas_id)
+    );
+    if (fresh) {
+      if (
+        fresh.role !== selectedClass.role ||
+        fresh.members !== selectedClass.members ||
+        fresh.activeTasks !== selectedClass.activeTasks
+      ) {
+        setSelectedClass(fresh);
+      }
+    } else if (classList.length >= 0 && subView && subView !== "buat-kelas" && subView !== "gabung-kelas") {
+      // kelas sudah tidak ada (dihapus / keluar)
+      if (subView === "daftar-tugas-kelas" || subView === "anggota-kelas" || subView === "detail-tugas") {
+        setSelectedClass(null);
+        setSelectedTask(null);
+        setSubView(null);
+      }
+    }
+  }, [classList]);
+
   const onRefresh = async () => {
     setRefreshing(true);
     await loadData();
@@ -345,6 +506,30 @@ export default function Dashboard() {
   const handleOpenClass = (cls: any) => {
     setSelectedClass(cls);
     setSubView("daftar-tugas-kelas");
+  };
+
+  // [REVISI 2] Buka form Buat Kelas hanya jika belum jadi PJMK di kelas lain
+  const handleBukaBuatKelas = async () => {
+    if (kelasPjmkSaya) {
+      Alert.alert(
+        "Tidak bisa membuat kelas",
+        `Anda sudah menjadi ${kelasPjmkSaya.role} di kelas "${kelasPjmkSaya.name}". Satu akun hanya boleh menjadi PJMK di satu mata kuliah.`
+      );
+      return;
+    }
+    try {
+      const status: any = await getPjmkStatus(currentUser.userId);
+      if (status?.sudah_pjmk) {
+        Alert.alert(
+          "Tidak bisa membuat kelas",
+          `Anda sudah menjadi ${status.peran} di kelas "${status.nama_kelas}". Satu akun hanya boleh menjadi PJMK di satu mata kuliah.`
+        );
+        return;
+      }
+    } catch {
+      // Jika pengecekan server gagal, backend tetap menolak saat kelas dibuat
+    }
+    setSubView("buat-kelas");
   };
 
   const handleCopyClassCode = async (code: string) => {
@@ -382,7 +567,8 @@ export default function Dashboard() {
           style: "destructive",
           onPress: async () => {
             try {
-              await deleteTask(String(taskId));
+              // FIX: api.js mewajibkan id pengguna (dikirim sebagai ?oleh=)
+              await deleteTask(String(taskId), currentUser.userId);
               setTasks((prev) => prev.filter((t) => t.id !== taskId));
               setSubView("daftar-tugas-kelas");
               setSelectedTask(null);
@@ -427,14 +613,14 @@ export default function Dashboard() {
       const conn = await checkServerConnection();
       if (conn.ok) {
         Alert.alert("Koneksi Berhasil!", `Terhubung ke server di ${newUrl}`);
-        setServerStatus(`Terhubung ke Server (${newUrl})`);
+        setServerStatus(`Online - Terhubung ke Server (${newUrl})`);
         await loadData();
       } else {
         Alert.alert(
           "Gagal Terhubung",
           `Tidak dapat menghubungi ${newUrl}. Periksa koneksi Wi-Fi dan firewall.`
         );
-        setServerStatus(`Gagal terhubung (${newUrl})`);
+        setServerStatus(`Server tidak terjangkau (${newUrl})`);
       }
     } finally {
       setCheckingConn(false);
@@ -458,7 +644,7 @@ export default function Dashboard() {
       (t) => String(t.kelas_id) === String(selectedClass.kelas_id)
     );
 
-    return (
+    return bungkus(
       <DaftarTugasKelasComp
         kelas={selectedClass}
         currentUser={currentUser}
@@ -484,7 +670,7 @@ export default function Dashboard() {
 
   // 2. Sub-View: Detail Tugas
   if (subView === "detail-tugas" && selectedTask) {
-    return (
+    return bungkus(
       <View style={{ flex: 1 }}>
         <DetailTugasComp
           task={selectedTask}
@@ -513,19 +699,22 @@ export default function Dashboard() {
   }
 
   // 3. Sub-View: Anggota Kelas
+  //    onChanged: dipanggil layar anggota setelah peran berubah / PJMK Pendamping dicopot /
+  //    anggota keluar, supaya daftar kelas di dashboard ikut diperbarui.
   if (subView === "anggota-kelas" && selectedClass) {
-    return (
+    return bungkus(
       <AnggotaKelasComp
         kelas={selectedClass}
         currentUser={currentUser}
         onBack={() => setSubView("daftar-tugas-kelas")}
+        onChanged={loadData}
       />
     );
   }
 
   // 4. Sub-View: Buat Kelas (PJMK)
   if (subView === "buat-kelas") {
-    return (
+    return bungkus(
       <BuatKelasComp
         currentUser={currentUser}
         onBack={() => setSubView(null)}
@@ -536,7 +725,7 @@ export default function Dashboard() {
 
   // 5. Sub-View: Gabung Kelas
   if (subView === "gabung-kelas") {
-    return (
+    return bungkus(
       <GabungKelasComp
         currentUser={currentUser}
         onBack={() => setSubView(null)}
@@ -555,7 +744,7 @@ export default function Dashboard() {
         name: "Kelas Utama",
       };
 
-    return (
+    return bungkus(
       <FormTugasComp
         task={editingTask}
         kelas={targetClass}
@@ -577,6 +766,7 @@ export default function Dashboard() {
     return timeA - timeB;
   });
   const nearestTask = sortedPendingTasks[0];
+  const nearestLabelHari = nearestTask ? hitungLabelHari(nearestTask.deadlineRaw) : "";
 
   // Filter tugas untuk bagian "Tugas Mendatang"
   const displayedTasks =
@@ -586,11 +776,20 @@ export default function Dashboard() {
       ? finishedTasks
       : tasks;
 
+  // Daftar kalender diurutkan sesuai tenggat yang diinput
+  const calendarTasks = [...tasks].sort((a, b) => {
+    const timeA = a.deadlineRaw ? new Date(a.deadlineRaw).getTime() : Infinity;
+    const timeB = b.deadlineRaw ? new Date(b.deadlineRaw).getTime() : Infinity;
+    return timeA - timeB;
+  });
+
   const bottomSpace = Math.max(insets.bottom, 8) + 70;
 
   return (
     <SafeAreaView edges={["top"]} style={styles.screen}>
-      {/* HEADER ATAS SESUAI FIGMA BERANDA - DAFTAR KELAS */}
+      <StatusBar style="dark" />
+
+      {/* HEADER ATAS */}
       <View style={styles.topHeader}>
         <View style={styles.headerBrandBox}>
           <Text style={styles.appBrand}>Tasky</Text>
@@ -618,13 +817,6 @@ export default function Dashboard() {
         </TouchableOpacity>
       </View>
 
-      {/* STRIP MODE OFFLINE / SINKRONISASI SESUAI FIGMA */}
-      <View style={styles.offlineStrip}>
-        <Text style={styles.offlineStripText}>
-          ⚡ Mode Offline • Perubahan akan disinkronkan saat online ⚡
-        </Text>
-      </View>
-
       {/* KONTEN UTAMA BERDASARKAN TAB */}
       {activeTab === "catatan" ? (
         <CatatanComp currentUser={currentUser} activeClass={classList[0]} />
@@ -650,6 +842,7 @@ export default function Dashboard() {
           backendPort={BACKEND_PORT}
           onLogout={handleLogout}
           bottomSpace={bottomSpace}
+          onProfileUpdated={terapkanProfil}
         />
       ) : (
         /* ================= TAB BERANDA / DAFTAR KELAS ================= */
@@ -670,7 +863,7 @@ export default function Dashboard() {
             </View>
           ) : null}
 
-          {/* GREETING CARD SESUAI FIGMA */}
+          {/* GREETING CARD */}
           <View style={styles.greetingCard}>
             <View style={styles.greetingLeft}>
               <Text style={styles.greetingTitle}>
@@ -679,8 +872,12 @@ export default function Dashboard() {
               <View style={styles.nimRow}>
                 <Text style={styles.nimIcon}>🪪</Text>
                 <Text style={styles.nimText}>
-                  NIM : {currentUser.nim} •{" "}
-                  <Text style={styles.semesterTag}>Smt {currentUser.semester}</Text>
+                  NIM : {currentUser.nim || "-"}
+                  {currentUser.semester ? (
+                    <Text>
+                      {" "}• <Text style={styles.semesterTag}>Smt {currentUser.semester}</Text>
+                    </Text>
+                  ) : null}
                 </Text>
               </View>
             </View>
@@ -697,12 +894,12 @@ export default function Dashboard() {
             </View>
           </View>
 
-          {/* DUA KARTU AKSI CEPAT: [ BUAT KELAS ] & [ GABUNG KELAS ] SESUAI FIGMA */}
+          {/* DUA KARTU AKSI CEPAT: [ BUAT KELAS ] & [ GABUNG KELAS ] */}
           <View style={styles.quickActionRow}>
-            {/* BUAT KELAS (PJMK) */}
+            {/* BUAT KELAS (PJMK) - dikunci jika sudah jadi PJMK di kelas lain */}
             <TouchableOpacity
-              style={styles.actionCardPrimary}
-              onPress={() => setSubView("buat-kelas")}
+              style={[styles.actionCardPrimary, sudahPjmk && styles.actionCardDisabled]}
+              onPress={handleBukaBuatKelas}
               activeOpacity={0.85}
             >
               <View style={styles.actionIconCirclePrimary}>
@@ -710,7 +907,7 @@ export default function Dashboard() {
               </View>
               <Text style={styles.actionCardTitlePrimary}>Buat Kelas</Text>
               <Text style={styles.actionCardSubtitlePrimary}>
-                Khusus PJMK / Admin
+                {sudahPjmk ? "Sudah jadi PJMK" : "Khusus PJMK / Admin"}
               </Text>
             </TouchableOpacity>
 
@@ -730,7 +927,7 @@ export default function Dashboard() {
             </TouchableOpacity>
           </View>
 
-          {/* RINGKASAN TUGAS & DEADLINE CEPAT (DARI FIGMA TASKY DASHBOARD) */}
+          {/* RINGKASAN TUGAS & DEADLINE CEPAT */}
           <View style={styles.statsRow}>
             {/* KARTU 1: TUGAS BELUM SELESAI */}
             <View style={styles.statCardLeft}>
@@ -748,15 +945,17 @@ export default function Dashboard() {
               </Text>
             </View>
 
-            {/* KARTU 2: DEADLINE TERDEKAT */}
+            {/* KARTU 2: DEADLINE TERDEKAT (label H-n sesuai tenggat yang diinput) */}
             <View style={styles.statCardRight}>
               <View style={styles.statHeaderRow}>
                 <View style={styles.statIconBoxOrange}>
                   <Text style={styles.statIconEmoji}>⏰</Text>
                 </View>
-                <View style={styles.h1Pill}>
-                  <Text style={styles.h1PillText}>H-1</Text>
-                </View>
+                {nearestLabelHari ? (
+                  <View style={styles.h1Pill}>
+                    <Text style={styles.h1PillText}>{nearestLabelHari}</Text>
+                  </View>
+                ) : null}
               </View>
               <Text style={styles.statCardSubtitle}>Deadline Terdekat</Text>
               <Text
@@ -821,7 +1020,7 @@ export default function Dashboard() {
               style={{ marginVertical: 24 }}
             />
           ) : classList.length === 0 ? (
-            /* EMPTY STATE MAHASISWA BARU (0 KELAS) SESUAI INSTRUKSI SRS & USER */
+            /* EMPTY STATE MAHASISWA BARU (0 KELAS) */
             <View style={styles.emptyClassCard}>
               <View style={styles.emptyIconCircle}>
                 <Text style={styles.emptyEmoji}>🎓</Text>
@@ -833,7 +1032,7 @@ export default function Dashboard() {
               <View style={styles.emptyActionRow}>
                 <TouchableOpacity
                   style={styles.emptyPrimaryBtn}
-                  onPress={() => setSubView("buat-kelas")}
+                  onPress={handleBukaBuatKelas}
                 >
                   <Text style={styles.emptyPrimaryBtnText}>+ Buat Kelas Baru</Text>
                 </TouchableOpacity>
@@ -846,10 +1045,9 @@ export default function Dashboard() {
               </View>
             </View>
           ) : (
-            /* DAFTAR KELAS PERSIS FIGMA */
+            /* DAFTAR KELAS */
             classList.map((cls, idx) => {
               const activeCount = countActiveTasks(cls.kelas_id);
-              const isPjmk = cls.isPjmk;
 
               return (
                 <TouchableOpacity
@@ -863,9 +1061,9 @@ export default function Dashboard() {
                     <View
                       style={[
                         styles.roleBadge,
-                        isPjmk
+                        cls.isUtama
                           ? styles.roleBadgePjmk
-                          : cls.role?.includes("Pendamping")
+                          : cls.isPendamping
                           ? styles.roleBadgePendamping
                           : styles.roleBadgeMhs,
                       ]}
@@ -873,16 +1071,14 @@ export default function Dashboard() {
                       <Text
                         style={[
                           styles.roleBadgeText,
-                          isPjmk
+                          cls.isUtama
                             ? styles.roleBadgeTextPjmk
-                            : cls.role?.includes("Pendamping")
+                            : cls.isPendamping
                             ? styles.roleBadgeTextPendamping
                             : styles.roleBadgeTextMhs,
                         ]}
                       >
-                        {isPjmk
-                          ? "PJMK (Admin Kelas)"
-                          : cls.role || "Mahasiswa"}
+                        {cls.role}
                       </Text>
                     </View>
 
@@ -906,17 +1102,19 @@ export default function Dashboard() {
                     </TouchableOpacity>
                   </View>
 
-                  {/* NAMA KELAS & FAKULTAS/RUANGAN */}
-                  <Text style={styles.className}>{cls.name || "Kelas Tanpa Nama"}</Text>
-                  <Text style={styles.classRoom}>
-                    {cls.room || "Fakultas MIPA • Universitas Udayana"}
+                  {/* NAMA KELAS (& RUANGAN jika ada di data) */}
+                  <Text
+                    style={[styles.className, !cls.room && { marginBottom: 12 }]}
+                  >
+                    {cls.name || "Kelas Tanpa Nama"}
                   </Text>
+                  {cls.room ? <Text style={styles.classRoom}>{cls.room}</Text> : null}
 
                   {/* FOOTER KARTU KELAS */}
                   <View style={styles.classCardFooter}>
                     <View style={styles.classMetaRow}>
                       <Text style={styles.matkulMeta}>
-                        📘 {cls.matkulCount} Matkul
+                        👥 {cls.members} Anggota
                       </Text>
                       <View
                         style={[
@@ -950,7 +1148,7 @@ export default function Dashboard() {
             <Text style={styles.sortSubtitle}>Urut Deadline</Text>
           </View>
 
-          {/* TABS FILTER TUGAS: [ SEMUA ] | [ BELUM DIKERJAKAN ] | [ SELESAI ] */}
+          {/* TABS FILTER TUGAS */}
           <View style={styles.taskFilterRow}>
             <TouchableOpacity
               style={[
@@ -1004,7 +1202,7 @@ export default function Dashboard() {
             </TouchableOpacity>
           </View>
 
-          {/* DAFTAR TUGAS SESUAI DESAIN FIGMA */}
+          {/* DAFTAR TUGAS */}
           {displayedTasks.length === 0 ? (
             <View style={styles.emptyTaskCard}>
               <Text style={styles.emptyTaskTitle}>
@@ -1089,12 +1287,15 @@ export default function Dashboard() {
                     </TouchableOpacity>
                   </View>
 
-                  {/* INFO PEMBUAT & TIPE */}
+                  {/* INFO PEMBUAT & TENGGAT SESUAI INPUT */}
                   <Text style={styles.taskCreatorText}>
-                    👤 {t.creator} • Tugas Individu
+                    👤 {t.creator}
+                  </Text>
+                  <Text style={styles.taskDeadlineText}>
+                    🗓️ Tenggat: {t.deadline}
                   </Text>
 
-                  {/* FOOTER TUGAS: STATUS BADGE & FORMAT */}
+                  {/* FOOTER TUGAS: STATUS BADGE */}
                   <View style={styles.taskFooterRow}>
                     <View
                       style={[
@@ -1115,32 +1316,28 @@ export default function Dashboard() {
                         {t.status}
                       </Text>
                     </View>
-
-                    <Text style={styles.taskFileFormatText}>
-                      📄 PDF / Dokumen
-                    </Text>
                   </View>
                 </TouchableOpacity>
               );
             })
           )}
 
-          {/* BANNER SINKRONISASI OTOMATIS DI BAGIAN BAWAH SESUAI FIGMA */}
+          {/* [REVISI 1] Banner online (menggantikan teks "data lokal / jaringan pulih") */}
           <View style={styles.bottomSyncCard}>
             <View style={styles.bottomSyncIconBox}>
               <Text style={styles.bottomSyncEmoji}>🔄</Text>
             </View>
             <View style={styles.bottomSyncContent}>
-              <Text style={styles.bottomSyncTitle}>Sinkronisasi Otomatis</Text>
+              <Text style={styles.bottomSyncTitle}>Sinkronisasi Online</Text>
               <Text style={styles.bottomSyncDesc}>
-                Data lokal Anda aman. Begitu jaringan pulih, tugas & progres tersimpan ke server.
+                Tugas & progres Anda tersimpan langsung ke server. Tarik layar ke bawah untuk memuat data terbaru.
               </Text>
             </View>
           </View>
         </ScrollView>
       )}
 
-      {/* FLOATING ACTION BUTTON (FAB) KHUSUS PJMK SESUAI FIGMA */}
+      {/* FLOATING ACTION BUTTON (FAB) KHUSUS PJMK */}
       {activeTab === "beranda" && !subView && isPjmkAnyClass ? (
         <View style={[styles.fabContainer, { bottom: bottomSpace + 12 }]}>
           <View style={styles.fabPjmkBadge}>
@@ -1160,7 +1357,7 @@ export default function Dashboard() {
         </View>
       ) : null}
 
-      {/* BOTTOM NAVIGATION SESUAI FIGMA DENGAN INDIKATOR NOTIFIKASI */}
+      {/* BOTTOM NAVIGATION */}
       <View
         style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 8) }]}
       >
@@ -1199,7 +1396,7 @@ export default function Dashboard() {
         })}
       </View>
 
-      {/* MODAL KALENDER DEADLINE SESUAI FIGMA */}
+      {/* MODAL KALENDER DEADLINE (tanggal & jam dari tenggat yang diinput, terurut) */}
       <Modal
         visible={kalenderVisible}
         transparent={true}
@@ -1210,33 +1407,39 @@ export default function Dashboard() {
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>📅 Kalender Deadline</Text>
-              <TouchableOpacity onPress={() => setKalenderVisible(false)}>
+              <TouchableOpacity
+                onPress={() => setKalenderVisible(false)}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
                 <Text style={styles.modalCloseText}>✕</Text>
               </TouchableOpacity>
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
               <Text style={styles.calendarSubtitle}>
-                Daftar tenggat waktu tugas kuliah bulan ini:
+                Daftar tenggat waktu tugas kuliah, diurutkan dari yang terdekat:
               </Text>
 
-              {tasks.length === 0 ? (
+              {calendarTasks.length === 0 ? (
                 <Text style={styles.calendarEmptyText}>
                   Belum ada tugas dengan tenggat waktu.
                 </Text>
               ) : (
-                tasks.map((t, idx) => (
+                calendarTasks.map((t, idx) => (
                   <View key={String(t.id ?? idx)} style={styles.calendarItem}>
                     <View style={styles.calendarDateBox}>
                       <Text style={styles.calendarDateText}>
-                        {t.deadline ? t.deadline.split(",")[0] : `Tugas ${idx + 1}`}
+                        {formatTanggalSaja(t.deadlineRaw)}
+                      </Text>
+                      <Text style={styles.calendarTimeText}>
+                        {formatJamSaja(t.deadlineRaw)}
                       </Text>
                     </View>
                     <View style={styles.calendarItemInfo}>
                       <Text style={styles.calendarItemTitle}>{t.title}</Text>
                       <Text style={styles.calendarItemSubject}>{t.subject}</Text>
                       <Text style={styles.calendarItemCountdown}>
-                        ⏰ {t.countdown || t.deadline}
+                        ⏰ {t.status === "Selesai" ? "Selesai" : t.countdown || t.deadline}
                       </Text>
                     </View>
                   </View>
@@ -1254,7 +1457,7 @@ export default function Dashboard() {
         </View>
       </Modal>
 
-      {/* MODAL STATISTIK SAYA SESUAI FIGMA */}
+      {/* MODAL STATISTIK SAYA */}
       <Modal
         visible={statistikVisible}
         transparent={true}
@@ -1265,7 +1468,10 @@ export default function Dashboard() {
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>📊 Statistik Akademik</Text>
-              <TouchableOpacity onPress={() => setStatistikVisible(false)}>
+              <TouchableOpacity
+                onPress={() => setStatistikVisible(false)}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
                 <Text style={styles.modalCloseText}>✕</Text>
               </TouchableOpacity>
             </View>
@@ -1374,18 +1580,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: COLORS.primaryBlue,
   },
-  offlineStrip: {
-    backgroundColor: COLORS.warningBg,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  offlineStripText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: COLORS.warningText,
-  },
   scrollArea: {
     flex: 1,
   },
@@ -1488,6 +1682,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 6,
     elevation: 4,
+  },
+  actionCardDisabled: {
+    opacity: 0.55,
   },
   actionIconCirclePrimary: {
     width: 32,
@@ -1996,6 +2193,12 @@ const styles = StyleSheet.create({
   taskCreatorText: {
     fontSize: 11,
     color: COLORS.subText,
+    marginBottom: 4,
+  },
+  taskDeadlineText: {
+    fontSize: 11,
+    color: COLORS.subText,
+    fontWeight: "600",
     marginBottom: 10,
   },
   taskFooterRow: {
@@ -2026,10 +2229,6 @@ const styles = StyleSheet.create({
   },
   taskStatusPillTextSuccess: {
     color: COLORS.successText,
-  },
-  taskFileFormatText: {
-    fontSize: 11,
-    color: COLORS.subText,
   },
   bottomSyncCard: {
     backgroundColor: "#EFF6FF",
@@ -2186,7 +2385,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
     color: COLORS.subText,
     fontWeight: "bold",
-    padding: 4,
+    padding: 8,
   },
   calendarSubtitle: {
     fontSize: 13,
@@ -2220,6 +2419,12 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: COLORS.primaryBlue,
     textAlign: "center",
+  },
+  calendarTimeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.subText,
+    marginTop: 2,
   },
   calendarItemInfo: {
     flex: 1,
