@@ -63,7 +63,7 @@ export default function TambahTugasModal({
       }
 
       Alert.alert(
-        "Tugas Berhasil Disimpan! 🎉",
+        "Tugas Berhasil Disimpan",
         "Tugas telah tersimpan di server dan dapat dilihat oleh seluruh anggota kelas."
       );
       if (onTaskSaved) await onTaskSaved(res);

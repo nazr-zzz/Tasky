@@ -102,10 +102,22 @@ export default function AnggotaKelasScreen({
 
   // ---------------------------------------------------------------
   // ANGKAT jadi PJMK Pendamping
-  // [REVISI 2] Backend menolak (403) jika anggota tsb sudah menjadi PJMK
-  // di kelas / mata kuliah lain. Pesannya ditampilkan apa adanya.
+  // [REVISI 9] Maksimal 2 PJMK per mata kuliah (1 Utama + 1 Pendamping).
   // ---------------------------------------------------------------
+  const totalPjmk = members.filter(
+    (m) => m.role === "PJMK Utama" || m.role === "PJMK Pendamping"
+  ).length;
+  const isPjmkFull = totalPjmk >= 2;
+
   const handlePromote = (member) => {
+    if (isPjmkFull) {
+      Alert.alert(
+        "Kuota PJMK Penuh",
+        "Mata kuliah ini sudah memiliki 2 PJMK (1 PJMK Utama dan 1 PJMK Pendamping). Tidak dapat menambah PJMK Pendamping lagi."
+      );
+      return;
+    }
+
     Alert.alert(
       "Angkat PJMK Pendamping",
       `Apakah Anda yakin ingin mengangkat "${member.name}" sebagai PJMK Pendamping kelas ini? Dia akan memiliki hak untuk menambah dan mengubah tugas kuliah.`,
@@ -136,7 +148,7 @@ export default function AnggotaKelasScreen({
               );
               if (onChanged) onChanged();
               Alert.alert(
-                "Sukses! 👑",
+                "Sukses",
                 `${member.name} sekarang aktif sebagai PJMK Pendamping.`
               );
             } catch (e) {
@@ -199,7 +211,7 @@ export default function AnggotaKelasScreen({
     if (!kodeKelas || kodeKelas === "-") return;
     try {
       await Clipboard.setStringAsync(String(kodeKelas));
-      Alert.alert("Disalin! 📋", `Kode kelas "${kodeKelas}" telah disalin.`);
+      Alert.alert("Disalin", `Kode kelas "${kodeKelas}" telah disalin.`);
     } catch (e) {
       Alert.alert("Gagal", "Kode kelas tidak dapat disalin.");
     }
@@ -243,10 +255,7 @@ export default function AnggotaKelasScreen({
         {/* CLASS INFO BOX */}
         <View style={styles.classInfoBox}>
           <View style={styles.semesterRow}>
-            <Text style={styles.semesterTag}>🎓 INFORMASI KELAS</Text>
-            <View style={styles.miniGroupIconBox}>
-              <Text style={styles.miniGroupIcon}>👥</Text>
-            </View>
+            <Text style={styles.semesterTag}>INFORMASI KELAS</Text>
           </View>
 
           <Text style={styles.classTitle}>{namaKelas}</Text>
@@ -259,7 +268,7 @@ export default function AnggotaKelasScreen({
               Kode Kelas: <Text style={styles.codeValue}>{kodeKelas}</Text>
             </Text>
             <TouchableOpacity style={styles.copyPill} onPress={handleCopyCode}>
-              <Text style={styles.copyPillText}>📋 Salin</Text>
+              <Text style={styles.copyPillText}>Salin</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -267,18 +276,24 @@ export default function AnggotaKelasScreen({
         {/* BANNER KEWENANGAN PJMK UTAMA */}
         {isPJMKUtama && (
           <View style={styles.pjmkBanner}>
-            <View style={styles.pjmkIconBox}>
-              <Text style={styles.pjmkIcon}>🛡️</Text>
-            </View>
             <View style={styles.pjmkContent}>
               <Text style={styles.pjmkTitle}>Kewenangan PJMK Utama</Text>
               <Text style={styles.pjmkDesc}>
                 Sebagai PJMK Utama, Anda dapat mengangkat anggota menjadi PJMK
                 Pendamping untuk membantu mengelola tugas kuliah, dan dapat
-                mencopot aksesnya kapan saja. Satu akun hanya boleh menjadi PJMK
-                di satu mata kuliah.
+                mencopot aksesnya kapan saja. Maksimal PJMK per mata kuliah adalah 2 orang.
               </Text>
             </View>
+          </View>
+        )}
+
+        {/* REVISI 9: BANNER KUOTA PJMK JIKA SUDAH PENUH (2/2) */}
+        {isPJMKUtama && isPjmkFull && (
+          <View style={styles.fullQuotaBanner}>
+            <Text style={styles.fullQuotaTitle}>Kuota PJMK Penuh (2/2)</Text>
+            <Text style={styles.fullQuotaDesc}>
+              Mata kuliah ini sudah memiliki 1 PJMK Utama dan 1 PJMK Pendamping. Mahasiswa lain tidak dapat dijadikan PJMK Pendamping kecuali akses pendamping yang ada dicopot terlebih dahulu.
+            </Text>
           </View>
         )}
 
@@ -300,7 +315,7 @@ export default function AnggotaKelasScreen({
             <Text style={styles.errorTitle}>Gagal Memuat Anggota</Text>
             <Text style={styles.errorDesc}>{error}</Text>
             <TouchableOpacity style={styles.retryBtn} onPress={loadMembers}>
-              <Text style={styles.retryBtnText}>🔄 Coba Lagi</Text>
+              <Text style={styles.retryBtnText}>Coba Lagi</Text>
             </TouchableOpacity>
           </View>
         ) : members.length === 0 ? (
@@ -360,11 +375,6 @@ export default function AnggotaKelasScreen({
                             : styles.textMhs,
                         ]}
                       >
-                        {member.role === "PJMK Utama"
-                          ? "👑 "
-                          : member.role === "PJMK Pendamping"
-                          ? "👥 "
-                          : ""}
                         {member.role}
                       </Text>
                     </View>
@@ -375,7 +385,7 @@ export default function AnggotaKelasScreen({
                   {member.role === "PJMK Utama" && (
                     <View style={styles.statusPillsRow}>
                       <Text style={styles.activeStatusText}>
-                        🟢 Penanggung Jawab Kelas
+                        Penanggung Jawab Kelas
                       </Text>
                       <View style={styles.accessBadge}>
                         <Text style={styles.accessText}>Akses Penuh</Text>
@@ -387,8 +397,8 @@ export default function AnggotaKelasScreen({
                     <Text style={styles.subText}>{member.subText}</Text>
                   ) : null}
 
-                  {/* TOMBOL JADIKAN PJMK PENDAMPING (HANYA UNTUK PJMK UTAMA) */}
-                  {isPJMKUtama && member.role === "Mahasiswa" && !member.isSelf && (
+                  {/* TOMBOL JADIKAN PJMK PENDAMPING (HANYA JIKA KUOTA BELUM PENUH) */}
+                  {isPJMKUtama && member.role === "Mahasiswa" && !member.isSelf && !isPjmkFull && (
                     <TouchableOpacity
                       style={[
                         styles.promoteBtn,
@@ -402,7 +412,7 @@ export default function AnggotaKelasScreen({
                         <ActivityIndicator size="small" color="#1D4ED8" />
                       ) : (
                         <Text style={styles.promoteBtnText}>
-                          👥+ Jadikan PJMK Pendamping
+                          + Jadikan PJMK Pendamping
                         </Text>
                       )}
                     </TouchableOpacity>
@@ -423,7 +433,7 @@ export default function AnggotaKelasScreen({
                         <ActivityIndicator size="small" color="#B91C1C" />
                       ) : (
                         <Text style={styles.copotBtnText}>
-                          ✕ Copot Akses Pendamping
+                          Copot Akses Pendamping
                         </Text>
                       )}
                     </TouchableOpacity>
@@ -612,6 +622,25 @@ const styles = StyleSheet.create({
   pjmkDesc: {
     fontSize: 11,
     color: "#3B82F6",
+    lineHeight: 16,
+  },
+  fullQuotaBanner: {
+    backgroundColor: "#FEF3C7",
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#FCD34D",
+    marginBottom: 16,
+  },
+  fullQuotaTitle: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#92400E",
+    marginBottom: 4,
+  },
+  fullQuotaDesc: {
+    fontSize: 11,
+    color: "#B45309",
     lineHeight: 16,
   },
   sectionHeaderRow: {

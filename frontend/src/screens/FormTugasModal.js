@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import DateTimePicker, { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
+import { Ionicons } from "@expo/vector-icons";
 import ScreenHeader from "../components/BackButton";
 import { createTask, updateTask } from "../services/api";
 import { pick, parsePoin, getTaskDeadlineDate, formatTanggal, formatJam } from "../utils/deadline";
@@ -29,10 +30,14 @@ export default function FormTugasScreen({ task, kelas, currentUser, onBack, onTa
 
   const deadlineAwal = getTaskDeadlineDate(task);
 
+  const namaKelasTerkunci = kelas?.name || kelas?.nama_kelas || "";
+  const matkulDefault =
+    task?.subject && task.subject !== "-"
+      ? task.subject
+      : namaKelasTerkunci;
+
   const [judulTugas, setJudulTugas] = useState(task?.title && task.title !== "-" ? task.title : "");
-  const [selectedMatkul, setSelectedMatkul] = useState(
-    task?.subject && task.subject !== "-" ? task.subject : ""
-  );
+  const [selectedMatkul, setSelectedMatkul] = useState(matkulDefault);
   const [dosen, setDosen] = useState(pick(task, "dosen", "DOSEN") || "");
   const [modul, setModul] = useState(pick(task, "modul", "MODUL") || "");
   const [deadline, setDeadline] = useState(deadlineAwal || defaultDeadline());
@@ -118,7 +123,12 @@ export default function FormTugasScreen({ task, kelas, currentUser, onBack, onTa
 
       const res = isEditing ? await updateTask(task.id, payload) : await createTask(payload);
 
-      Alert.alert("Tugas Berhasil Disimpan! 🎉", "Tugas telah tersimpan dan dapat dilihat oleh seluruh anggota kelas.");
+      Alert.alert(
+        isEditing ? "Perubahan Disimpan" : "Tugas Berhasil Disimpan",
+        isEditing
+          ? "Data tugas telah berhasil diperbarui."
+          : "Tugas telah tersimpan dan dapat dilihat oleh seluruh anggota kelas."
+      );
 
       if (onTaskSaved) await onTaskSaved(res);
       if (onBack) onBack();
@@ -145,7 +155,7 @@ export default function FormTugasScreen({ task, kelas, currentUser, onBack, onTa
         >
           <View style={styles.bannerBox}>
             <View style={styles.bannerIconBox}>
-              <Text style={styles.bannerIcon}>📬</Text>
+              <Ionicons name="notifications-outline" size={18} color="#0047BA" />
             </View>
             <View style={styles.bannerContent}>
               <Text style={styles.bannerTitle}>Sinkronisasi Otomatis Anggota Kelas</Text>
@@ -167,16 +177,25 @@ export default function FormTugasScreen({ task, kelas, currentUser, onBack, onTa
             </View>
           </Field>
 
-          <Field label="Mata Kuliah *" badge="Langkah 2">
-            <View style={styles.inputBox}>
-              <TextInput
-                style={styles.textInput}
-                placeholder="Contoh: Basis Data"
-                placeholderTextColor="#94A3B8"
-                value={selectedMatkul}
-                onChangeText={setSelectedMatkul}
-              />
-            </View>
+          <Field label="Mata Kuliah *" badge={namaKelasTerkunci ? "Terkunci ke Kelas" : "Langkah 2"}>
+            {namaKelasTerkunci ? (
+              <View style={[styles.inputBox, styles.inputBoxLocked]}>
+                <Text style={styles.lockedMatkulText}>{selectedMatkul || namaKelasTerkunci}</Text>
+                <View style={styles.lockedBadge}>
+                  <Text style={styles.lockedBadgeText}>Mata Kuliah Kelas Ini</Text>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.inputBox}>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="Contoh: Basis Data"
+                  placeholderTextColor="#94A3B8"
+                  value={selectedMatkul}
+                  onChangeText={setSelectedMatkul}
+                />
+              </View>
+            )}
           </Field>
 
           <Field label="Tenggat Waktu (Deadline) *" badge="Langkah 3">
@@ -196,7 +215,7 @@ export default function FormTugasScreen({ task, kelas, currentUser, onBack, onTa
                   </View>
                 ) : (
                   <TouchableOpacity style={styles.pickerBtn} onPress={() => openAndroidPicker("date")}>
-                    <Text style={styles.inputIcon}>📅</Text>
+                    <Ionicons name="calendar-outline" size={16} color="#0047BA" style={{ marginRight: 6 }} />
                     <Text style={styles.pickerText}>{formatTanggal(deadline)}</Text>
                   </TouchableOpacity>
                 )}
@@ -217,7 +236,7 @@ export default function FormTugasScreen({ task, kelas, currentUser, onBack, onTa
                   </View>
                 ) : (
                   <TouchableOpacity style={styles.pickerBtn} onPress={() => openAndroidPicker("time")}>
-                    <Text style={styles.inputIcon}>🕒</Text>
+                    <Ionicons name="time-outline" size={16} color="#0047BA" style={{ marginRight: 6 }} />
                     <Text style={styles.pickerText}>{formatJam(deadline)}</Text>
                   </TouchableOpacity>
                 )}
@@ -291,7 +310,7 @@ export default function FormTugasScreen({ task, kelas, currentUser, onBack, onTa
 
           <Field label="Tautan Pengumpulan" badge="Opsional">
             <View style={styles.inputBox}>
-              <Text style={styles.inputIcon}>🔗</Text>
+              <Ionicons name="link-outline" size={16} color="#64748B" style={{ marginRight: 6 }} />
               <TextInput
                 style={styles.textInput}
                 placeholder="Contoh: classroom.google.com/..."
@@ -313,7 +332,9 @@ export default function FormTugasScreen({ task, kelas, currentUser, onBack, onTa
             {loading ? (
               <ActivityIndicator color="#FFFFFF" size="small" />
             ) : (
-              <Text style={styles.saveTaskText}>▶ Simpan Tugas</Text>
+              <Text style={styles.saveTaskText}>
+                {isEditing ? "Simpan Perubahan" : "Simpan Tugas"}
+              </Text>
             )}
           </TouchableOpacity>
 
@@ -388,6 +409,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     height: 48,
     marginBottom: 14,
+  },
+  inputBoxLocked: {
+    backgroundColor: "#F0F7FF",
+    borderColor: "#BFDBFE",
+    justifyContent: "space-between",
+  },
+  lockedMatkulText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#1E40AF",
+    flex: 1,
+  },
+  lockedBadge: {
+    backgroundColor: "#DBEAFE",
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+  },
+  lockedBadgeText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#1D4ED8",
   },
   inputIcon: { fontSize: 14, marginRight: 8 },
   textInput: { flex: 1, fontSize: 13, color: "#102A36" },

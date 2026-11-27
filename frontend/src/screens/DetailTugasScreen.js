@@ -81,7 +81,7 @@ export default function DetailTugasScreen({
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.badgesBar}>
           <View style={styles.coursePill}>
-            <Text style={styles.coursePillText}>💻 {currentTask.subject || "-"}</Text>
+            <Text style={styles.coursePillText}>{String(currentTask.subject || "-").toUpperCase()}</Text>
           </View>
           {!!modul && (
             <View style={styles.modulePill}>
@@ -91,13 +91,12 @@ export default function DetailTugasScreen({
         </View>
 
         <Text style={styles.title}>{currentTask.title}</Text>
-        {!!dosen && <Text style={styles.dosenText}>👤 Dosen: {dosen}</Text>}
-        {!!pembuat && <Text style={styles.dosenText}>📝 Dicatat oleh {pembuat}</Text>}
+        {!!dosen && <Text style={styles.dosenText}>Dosen: {dosen}</Text>}
+        {!!pembuat && <Text style={styles.dosenText}>Dicatat oleh {pembuat}</Text>}
 
         {/* TENGGAT WAKTU (sesuai input) */}
         <View style={styles.dueDateCard}>
           <View style={styles.dueDateTopRow}>
-            <Text style={styles.dueIcon}>📅</Text>
             <View style={{ flex: 1 }}>
               <Text style={styles.dueLabel}>TENGGAT WAKTU</Text>
               <Text style={styles.dueValue}>{deadlineText}</Text>
@@ -111,7 +110,7 @@ export default function DetailTugasScreen({
                 !cd.overdue && { backgroundColor: "#FEF3C7", color: "#B45309" },
               ]}
             >
-              {cd.overdue ? "🔴" : "⏳"} {cd.overdue ? cd.text : `Sisa Waktu: ${cd.text}`}
+              {cd.overdue ? cd.text : `Sisa Waktu: ${cd.text}`}
             </Text>
           )}
         </View>
@@ -120,7 +119,6 @@ export default function DetailTugasScreen({
         {(!!deskripsi || poinKunci.length > 0) && (
           <View style={styles.sectionCard}>
             <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionIcon}>📄</Text>
               <Text style={styles.sectionTitle}>Deskripsi Tugas</Text>
             </View>
 
@@ -131,7 +129,7 @@ export default function DetailTugasScreen({
                 <Text style={styles.checklistTitle}>Poin Kunci Pengerjaan:</Text>
                 {poinKunci.map((p, i) => (
                   <View key={`${p}-${i}`} style={styles.checkItem}>
-                    <Text style={styles.checkBullet}>✔</Text>
+                    <Text style={styles.checkBullet}>✓</Text>
                     <Text style={styles.checkText}>{p}</Text>
                   </View>
                 ))}
@@ -143,7 +141,6 @@ export default function DetailTugasScreen({
         {/* LINK PENGUMPULAN */}
         {!!link && (
           <TouchableOpacity style={styles.linkCard} onPress={handleOpenLink} activeOpacity={0.8}>
-            <Text style={styles.linkIcon}>🔗</Text>
             <View style={{ flex: 1 }}>
               <Text style={styles.linkTitle}>Tautan Pengumpulan</Text>
               <Text style={styles.linkValue} numberOfLines={1}>{link}</Text>
@@ -155,7 +152,6 @@ export default function DetailTugasScreen({
         {/* STATUS PRIBADI */}
         <View style={styles.statusSectionCard}>
           <View style={styles.statusHeaderRow}>
-            <Text style={styles.statusIcon}>✨</Text>
             <Text style={styles.statusTitle}>Status Pengerjaan Anda</Text>
             <View style={styles.pribadiBadge}>
               <Text style={styles.pribadiText}>Pribadi</Text>
@@ -169,7 +165,7 @@ export default function DetailTugasScreen({
               activeOpacity={0.8}
             >
               <Text style={[styles.statusOptionText, personalStatus === "belum" && styles.statusTextActiveRed]}>
-                ⭕ Belum Selesai
+                Belum Selesai
               </Text>
             </TouchableOpacity>
 
@@ -179,13 +175,13 @@ export default function DetailTugasScreen({
               activeOpacity={0.8}
             >
               <Text style={[styles.statusOptionText, personalStatus === "selesai" && styles.statusTextActiveGreen]}>
-                ✔ Selesai
+                ✓ Selesai
               </Text>
             </TouchableOpacity>
           </View>
 
           <Text style={styles.statusHint}>
-            ⓘ Perubahan status hanya berpengaruh pada checklist pribadi Anda.
+            Perubahan status hanya berpengaruh pada checklist pribadi Anda.
           </Text>
         </View>
 
@@ -205,17 +201,18 @@ export default function DetailTugasScreen({
             </View>
 
             <TouchableOpacity style={styles.actionBtnBlue} onPress={onOpenUbahDeadline} activeOpacity={0.8}>
-              <Text style={styles.actionBtnIcon}>⏰</Text>
               <Text style={styles.actionBtnTextBlue}>Ubah Deadline</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.actionBtnGrey} onPress={onOpenEditTask} activeOpacity={0.8}>
-              <Text style={styles.actionBtnIcon}>✏️</Text>
+            <TouchableOpacity
+              style={styles.actionBtnGrey}
+              onPress={() => onOpenEditTask && onOpenEditTask(currentTask)}
+              activeOpacity={0.8}
+            >
               <Text style={styles.actionBtnTextGrey}>Ubah Tugas</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.actionBtnRed} onPress={handleDelete} activeOpacity={0.8}>
-              <Text style={styles.actionBtnIcon}>🗑️</Text>
               <Text style={styles.actionBtnTextRed}>Hapus Tugas</Text>
             </TouchableOpacity>
           </View>

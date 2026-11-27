@@ -1,4 +1,3 @@
-
 import React, { useState } from "react";
 import {
   View,
@@ -39,21 +38,21 @@ export default function DetailKelasScreen({
     if (Clipboard && Clipboard.setString) {
       Clipboard.setString(classData.kode_kelas);
     }
-    Alert.alert("Berhasil Disalin! 📋", `Kode kelas "${classData.kode_kelas}" telah disalin ke papan klip.`);
+    Alert.alert("Berhasil Disalin", `Kode kelas "${classData.kode_kelas}" telah disalin ke papan klip.`);
   };
 
   const sampleSections = [
     {
       id: "sec-1",
-      title: "📌 Praktikum Mandiri: Modul 4",
+      title: "Praktikum Mandiri: Modul 4",
       subtitle: "Desain Relasional & Normalisasi Tabel",
       tasksCount: "2 Tugas",
       tasks: [
         {
           id: 1,
           title: "Normalisasi ERD & Skema Relasional",
-          countdown: "⌛ H-1 • Besok, 23:59 WIB",
-          info: "👤 Tugas Individu • 📄 Format PDF",
+          countdown: "H-1 • Besok, 23:59 WIB",
+          info: "Tugas Individu • Format PDF",
           weight: "Bobot: 15%",
           status: "Belum Dikerjakan",
           color: "#FFB632",
@@ -61,8 +60,8 @@ export default function DetailKelasScreen({
         {
           id: 2,
           title: "Query SQL DDL & DML Dasar",
-          countdown: "⌛ H-4 • Jumat, 23:59 WIB",
-          info: "💻 Praktikum Lab • 📄 File .sql",
+          countdown: "H-4 • Jumat, 23:59 WIB",
+          info: "Praktikum Lab • File .sql",
           weight: "Bobot: 10%",
           status: "Belum Dikerjakan",
           color: "#4D9BFF",
@@ -71,7 +70,7 @@ export default function DetailKelasScreen({
     },
     {
       id: "sec-2",
-      title: "📖 Teori & Diskusi Kelompok",
+      title: "Teori & Diskusi Kelompok",
       subtitle: "Eksplorasi Arsitektur Database Modern",
       tasksCount: "1 Tugas",
       tasks: [
@@ -79,7 +78,7 @@ export default function DetailKelasScreen({
           id: 4,
           title: "Review Paper: In-Memory Database vs RDBMS",
           countdown: "✓ Diserahkan 14 Mar, 10:20 WIB",
-          info: "👥 Kelompok 3 • ⭐ Nilai: 94/100",
+          info: "Kelompok 3 • Nilai: 94/100",
           weight: "Telah Dikirim • Selesai",
           status: "Selesai",
           color: "#12B76A",
@@ -129,7 +128,6 @@ export default function DetailKelasScreen({
             onPress={handleCopyCode}
             activeOpacity={0.8}
           >
-            <Text style={styles.copyIcon}>📋</Text>
             <Text style={styles.copyText}>Salin</Text>
           </TouchableOpacity>
         </View>
@@ -142,7 +140,7 @@ export default function DetailKelasScreen({
             activeOpacity={0.7}
           >
             <Text style={[styles.tabText, activeTab === "tugas" && styles.tabTextActive]}>
-              📋 Tugas (2 Aktif)
+              Tugas (2 Aktif)
             </Text>
           </TouchableOpacity>
 
@@ -152,7 +150,7 @@ export default function DetailKelasScreen({
             activeOpacity={0.7}
           >
             <Text style={[styles.tabText, activeTab === "anggota" && styles.tabTextActive]}>
-              👥 Anggota (42)
+              Anggota (42)
             </Text>
           </TouchableOpacity>
 
@@ -162,7 +160,7 @@ export default function DetailKelasScreen({
             activeOpacity={0.7}
           >
             <Text style={[styles.tabText, activeTab === "catatan" && styles.tabTextActive]}>
-              📝 Catatan
+              Catatan
             </Text>
           </TouchableOpacity>
         </View>

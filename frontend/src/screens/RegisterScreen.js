@@ -12,14 +12,31 @@ import {
   StatusBar,
 } from "react-native";
 import { router } from "expo-router";
-import { registerUser } from "../services/auth";
+import { Ionicons } from "@expo/vector-icons";
+import { useAuth } from "../context/AuthContext";
+
+const firebaseMessage = (e) => {
+  switch (e?.code) {
+    case "auth/email-already-in-use":
+      return "Email ini sudah terdaftar. Silakan masuk.";
+    case "auth/invalid-email":
+      return "Format email tidak valid.";
+    case "auth/weak-password":
+      return "Kata sandi terlalu lemah (minimal 6 karakter).";
+    case "auth/network-request-failed":
+      return "Tidak dapat terhubung. Periksa koneksi internet Anda.";
+    default:
+      return e?.message || "Terjadi kesalahan saat pendaftaran akun.";
+  }
+};
 
 export default function RegisterScreen() {
+  const { register } = useAuth();
+
   const [nama, setNama] = useState("");
   const [nim, setNim] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState(""); // Kompatibilitas state sebelumnya
   const [showPassword, setShowPassword] = useState(false);
   const [agreed, setAgreed] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -43,6 +60,11 @@ export default function RegisterScreen() {
       return;
     }
 
+    if (password.length < 6) {
+      Alert.alert("Perhatian", "Kata sandi minimal 6 karakter.");
+      return;
+    }
+
     if (!agreed) {
       Alert.alert("Persetujuan", "Harap setujui Ketentuan Layanan & Kebijakan Privasi Tasky.");
       return;
@@ -50,20 +72,17 @@ export default function RegisterScreen() {
 
     setLoading(true);
     try {
-      const result = await registerUser(nama.trim(), nim.trim(), email.trim(), password);
-
-      Alert.alert(
-        "Registrasi Berhasil! 🎉",
-        result.pesan || "Akun Anda telah berhasil dibuat. Silakan login untuk melanjutkan.",
-        [
-          {
-            text: "Masuk Sekarang",
-            onPress: () => router.replace("/"),
-          },
-        ]
-      );
+      await register({
+        name: nama.trim(),
+        nim: nim.trim(),
+        email: email.trim(),
+        password,
+        semester: 1, // Pendaftaran akun baru otomatis Semester 1
+      });
+      // Setelah daftar, pengguna otomatis login.
+      // Perpindahan ke dashboard ditangani oleh _layout.tsx.
     } catch (error) {
-      Alert.alert("Registrasi Gagal", error.message || "Terjadi kesalahan saat pendaftaran akun.");
+      Alert.alert("Registrasi Gagal", firebaseMessage(error));
     } finally {
       setLoading(false);
     }
@@ -84,7 +103,7 @@ export default function RegisterScreen() {
         </TouchableOpacity>
 
         <View style={styles.portalBadge}>
-          <Text style={styles.portalBadgeIcon}>🎓</Text>
+          <Ionicons name="school-outline" size={14} color="#0047BA" style={{ marginRight: 4 }} />
           <Text style={styles.portalBadgeText}>Mahasiswa Portal</Text>
         </View>
       </View>
@@ -103,7 +122,8 @@ export default function RegisterScreen() {
         <View style={styles.bannerContainer}>
           <View style={styles.bannerCard}>
             <View style={styles.bannerGraphic}>
-              <Text style={styles.bannerIconGroup}>🧑‍🎓 💻 👩‍🎓 📚 👨‍🎓</Text>
+              <Text style={styles.bannerPortalTitle}>RUANG BELAJAR DIGITAL</Text>
+              <Text style={styles.bannerPortalSubtitle}>Kolaborasi Kelas Mahasiswa</Text>
             </View>
             <View style={styles.bannerTag}>
               <Text style={styles.bannerTagCheck}>✔</Text>
@@ -119,7 +139,6 @@ export default function RegisterScreen() {
           {/* NAMA LENGKAP */}
           <Text style={styles.label}>Nama Lengkap</Text>
           <View style={styles.inputContainer}>
-            <Text style={styles.fieldIcon}>👤</Text>
             <TextInput
               style={styles.input}
               placeholder="contoh: Nazril Ilham"
@@ -132,7 +151,6 @@ export default function RegisterScreen() {
           {/* NIM */}
           <Text style={styles.label}>Nomor Induk Mahasiswa (NIM)</Text>
           <View style={styles.inputContainer}>
-            <Text style={styles.fieldIcon}>🪪</Text>
             <TextInput
               style={styles.input}
               placeholder="contoh: 2106728192"
@@ -143,13 +161,12 @@ export default function RegisterScreen() {
             />
           </View>
           <Text style={styles.helperText}>
-            ⓘ Untuk verifikasi anggota kelas
+            Untuk verifikasi anggota kelas
           </Text>
 
           {/* EMAIL */}
           <Text style={styles.label}>Email Kampus / Aktif</Text>
           <View style={styles.inputContainer}>
-            <Text style={styles.fieldIcon}>✉️</Text>
             <TextInput
               style={styles.input}
               placeholder="nazril@student.ac.id"
@@ -164,20 +181,24 @@ export default function RegisterScreen() {
           {/* KATA SANDI */}
           <Text style={styles.label}>Kata Sandi</Text>
           <View style={styles.inputContainer}>
-            <Text style={styles.fieldIcon}>🔒</Text>
             <TextInput
               style={styles.input}
-              placeholder="RahasiaAkademik2024!"
+              placeholder="Minimal 6 karakter"
               placeholderTextColor="#98A2B3"
               value={password}
               onChangeText={setPassword}
               secureTextEntry={!showPassword}
+              autoCapitalize="none"
             />
             <TouchableOpacity
               onPress={() => setShowPassword(!showPassword)}
               style={styles.eyeBtn}
             >
-              <Text style={styles.eyeIcon}>{showPassword ? "👁️" : "👁️‍🗨️"}</Text>
+              <Ionicons
+                name={showPassword ? "eye-outline" : "eye-off-outline"}
+                size={18}
+                color="#98A2B3"
+              />
             </TouchableOpacity>
           </View>
 
@@ -211,7 +232,7 @@ export default function RegisterScreen() {
             </View>
             <Text style={styles.strengthText}>
               {strength >= 4
-                ? "✔ Kuat"
+                ? "Kuat"
                 : strength >= 3
                 ? "Bagus"
                 : strength >= 2
@@ -340,12 +361,23 @@ const styles = StyleSheet.create({
   },
   bannerGraphic: {
     height: 85,
-    backgroundColor: "#0F2850",
+    backgroundColor: "#0B3C82",
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 12,
   },
-  bannerIconGroup: {
-    fontSize: 28,
+  bannerPortalTitle: {
+    fontSize: 10,
+    fontWeight: "900",
+    color: "#60A5FA",
+    letterSpacing: 1.5,
+    marginBottom: 4,
+  },
+  bannerPortalSubtitle: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#FFFFFF",
+    letterSpacing: 0.3,
   },
   bannerTag: {
     position: "absolute",

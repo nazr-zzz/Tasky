@@ -14,6 +14,7 @@ import {
   markNotificationRead,
   markAllNotificationsRead,
 } from "../services/api";
+import { Ionicons } from "@expo/vector-icons";
 import PengaturanPengingat from "./PengaturanPengingat";
 
 // =========================================================================
@@ -35,9 +36,12 @@ function waktuRelatif(nilai) {
   return `${d.getDate()} ${BULAN[d.getMonth()]} ${d.getFullYear()}`;
 }
 
-// Kelompokkan tipe notifikasi dari server menjadi 3 jenis tampilan
+// Kelompokkan tipe notifikasi dari server menjadi jenis tampilan
 function normalisasiTipe(raw) {
   const s = String(raw || "").toLowerCase();
+  if (s.includes("tugas baru") || s.includes("tugas_baru") || s.includes("new_task")) {
+    return "tugas_baru";
+  }
   if (s.includes("ubah") || s.includes("change") || s.includes("perubahan")) {
     return "deadline_changed";
   }
@@ -54,9 +58,10 @@ function normalisasiTipe(raw) {
 }
 
 const TIPE_META = {
-  deadline_h1: { label: "PENGINGAT DEADLINE", icon: "⏰", bg: "#FEE2E2" },
-  deadline_changed: { label: "PERUBAHAN DEADLINE DARI PJMK", icon: "📅", bg: "#EFF6FF" },
-  info: { label: "INFORMASI", icon: "🔔", bg: "#F1F5F9" },
+  tugas_baru: { label: "TUGAS BARU DARI PJMK", icon: "TUGAS", bg: "#EFF6FF" },
+  deadline_h1: { label: "PENGINGAT DEADLINE", icon: "DEADLINE", bg: "#FEE2E2" },
+  deadline_changed: { label: "PERUBAHAN DEADLINE DARI PJMK", icon: "JADWAL", bg: "#EFF6FF" },
+  info: { label: "INFORMASI", icon: "INFO", bg: "#F1F5F9" },
 };
 
 const adalahBenar = (v) =>
@@ -198,12 +203,12 @@ export default function NotifikasiScreen({ currentUser, onOpenTask, onPengingatC
           <Text style={styles.errorTitle}>Gagal Memuat Notifikasi</Text>
           <Text style={styles.errorDesc}>{error}</Text>
           <TouchableOpacity style={styles.retryBtn} onPress={onRefresh}>
-            <Text style={styles.retryBtnText}>🔄 Coba Lagi</Text>
+            <Text style={styles.retryBtnText}>Coba Lagi</Text>
           </TouchableOpacity>
         </View>
       ) : notifications.length === 0 ? (
         <View style={styles.stateBox}>
-          <Text style={styles.emptyIcon}>🔔</Text>
+          <Ionicons name="notifications-off-outline" size={38} color="#94A3B8" style={{ marginBottom: 8 }} />
           <Text style={styles.stateText}>Belum ada notifikasi.</Text>
         </View>
       ) : (
@@ -241,7 +246,7 @@ export default function NotifikasiScreen({ currentUser, onOpenTask, onPengingatC
                 {(item.matkulTag || item.subTag) && (
                   <View style={styles.tagsRow}>
                     {item.matkulTag ? (
-                      <Text style={styles.tagItem}>📁 {item.matkulTag}</Text>
+                      <Text style={styles.tagItem}>{item.matkulTag}</Text>
                     ) : null}
                     {item.subTag ? (
                       <Text style={styles.tagItem} numberOfLines={1}>
@@ -261,13 +266,15 @@ export default function NotifikasiScreen({ currentUser, onOpenTask, onPengingatC
                 ) : null}
 
                 {/* TOMBOL AKSI (HANYA JIKA TERKAIT TUGAS) */}
-                {item.taskId !== undefined && item.type === "deadline_h1" && (
+                {item.taskId !== undefined && (item.type === "deadline_h1" || item.type === "tugas_baru") && (
                   <TouchableOpacity
                     style={styles.openTaskBtn}
                     onPress={() => handleOpenTask(item)}
                     activeOpacity={0.8}
                   >
-                    <Text style={styles.openTaskBtnText}>Buka Tugas</Text>
+                    <Text style={styles.openTaskBtnText}>
+                      {item.type === "tugas_baru" ? "Buka Tugas Baru" : "Buka Tugas"}
+                    </Text>
                   </TouchableOpacity>
                 )}
 
@@ -276,7 +283,7 @@ export default function NotifikasiScreen({ currentUser, onOpenTask, onPengingatC
                     style={styles.scheduleLink}
                     onPress={() => handleOpenTask(item)}
                   >
-                    <Text style={styles.scheduleLinkText}>🔍 Cek Detail Jadwal</Text>
+                    <Text style={styles.scheduleLinkText}>Cek Detail Tugas & Jadwal</Text>
                   </TouchableOpacity>
                 )}
               </View>

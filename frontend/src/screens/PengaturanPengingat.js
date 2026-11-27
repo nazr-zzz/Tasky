@@ -168,7 +168,7 @@ export default function PengaturanPengingat({ userId, onChanged }) {
             </View>
 
             <TouchableOpacity style={styles.ujiBtn} onPress={uji}>
-              <Text style={styles.ujiBtnText}>🔔 Kirim notifikasi uji (5 detik)</Text>
+              <Text style={styles.ujiBtnText}>Kirim notifikasi uji (5 detik)</Text>
             </TouchableOpacity>
 
             <Text style={styles.hint}>

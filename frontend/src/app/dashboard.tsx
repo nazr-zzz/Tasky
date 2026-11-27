@@ -10,12 +10,14 @@ import {
   RefreshControl,
   BackHandler,
   Modal,
+  Image,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
-import { useLocalSearchParams, router } from "expo-router";
+import { useAuth } from "../context/AuthContext";
 import * as Notifications from "expo-notifications";
 import * as Clipboard from "expo-clipboard";
+import { Ionicons } from "@expo/vector-icons";
 
 import DaftarTugasKelasScreen from "../screens/DaftarTugasKelasScreen";
 import DetailTugasScreen from "../screens/DetailTugasScreen";
@@ -27,6 +29,11 @@ import UbahDeadlineModal from "../screens/UbahDeadlineModal";
 import CatatanScreen from "../screens/CatatanScreen";
 import NotifikasiScreen from "../screens/NotifikasiScreen";
 import ProfilScreen from "../screens/ProfilScreen";
+import PendingTasksModal from "../screens/PendingTasksScreen";
+import NearestDeadlineModal from "../screens/NearestDeadlineScreen";
+
+const PendingTasksComp: any = PendingTasksModal;
+const NearestDeadlineComp: any = NearestDeadlineModal;
 
 import {
   fetchTasks,
@@ -210,15 +217,29 @@ function mapTask(t: any) {
 }
 
 const TABS = [
-  { key: "beranda", label: "Kelas / Tugas", icon: "📚" },
-  { key: "catatan", label: "Catatan", icon: "📝" },
-  { key: "notifikasi", label: "Notifikasi", icon: "🔔" },
-  { key: "profil", label: "Profil", icon: "👤" },
+  { key: "beranda", label: "Kelas / Tugas", iconOutline: "book-outline", iconFilled: "book" },
+  { key: "catatan", label: "Catatan", iconOutline: "document-text-outline", iconFilled: "document-text" },
+  { key: "notifikasi", label: "Notifikasi", iconOutline: "notifications-outline", iconFilled: "notifications" },
+  { key: "profil", label: "Profil", iconOutline: "person-outline", iconFilled: "person" },
 ];
 
 export default function Dashboard() {
-  const params = useLocalSearchParams();
+   // Data user diambil dari AuthContext (bukan dari parameter route)
+  const { user, logout } = useAuth() as any;
   const insets = useSafeAreaInsets();
+
+  const str = (v: any): string =>
+    v === undefined || v === null ? "" : String(v);
+
+  const params: any = {
+    userId: str(user?.userId ?? user?.uid),
+    nama: str(user?.nama ?? user?.name),
+    nim: str(user?.nim ?? user?.NIM),
+    email: str(user?.email),
+    semester: str(user?.semester),
+    foto: str(user?.foto ?? user?.FOTO),
+    role: str(user?.role),
+  };
 
   // [REVISI 3/10] Data profil disimpan di state: tidak ada lagi NIM / semester bawaan Figma,
   // dan bisa diperbarui setelah edit profil atau dari data server.
@@ -227,6 +248,7 @@ export default function Dashboard() {
     nim: asString(params.nim),
     email: asString(params.email),
     semester: asString(params.semester),
+    foto: asString(params.foto),
   });
 
   const currentUser = {
@@ -235,6 +257,7 @@ export default function Dashboard() {
     nim: profil.nim,
     email: profil.email,
     semester: profil.semester,
+    foto: profil.foto,
     role: asString(params.role) || "Mahasiswa",
   };
 
@@ -253,6 +276,7 @@ export default function Dashboard() {
       nim: ambil("NIM", "nim") ?? prev.nim,
       email: ambil("EMAIL", "email") ?? prev.email,
       semester: ambil("SEMESTER", "semester") ?? prev.semester,
+      foto: ambil("FOTO", "foto") ?? prev.foto,
     }));
   }, []);
 
@@ -266,6 +290,8 @@ export default function Dashboard() {
   const [ubahDeadlineVisible, setUbahDeadlineVisible] = useState(false);
   const [kalenderVisible, setKalenderVisible] = useState(false);
   const [statistikVisible, setStatistikVisible] = useState(false);
+  const [pendingTasksModalVisible, setPendingTasksModalVisible] = useState(false);
+  const [nearestDeadlineModalVisible, setNearestDeadlineModalVisible] = useState(false);
 
   const [serverStatus, setServerStatus] = useState<string>("Mengecek koneksi...");
   const [customIpInput, setCustomIpInput] = useState<string>(CURRENT_LAN_IP || "");
@@ -345,10 +371,12 @@ export default function Dashboard() {
         "Apakah Anda yakin ingin keluar dari akun?",
         [
           { text: "Batal", style: "cancel" },
-          {
+                    {
             text: "Keluar",
             style: "destructive",
-            onPress: () => router.replace("/"),
+            onPress: () => {
+              logout();
+            },
           },
         ]
       );
@@ -388,11 +416,10 @@ export default function Dashboard() {
     return () => sub.remove();
   }, []);
 
+    // Sinkronkan profil bila data user di AuthContext berubah
   useEffect(() => {
-    if (!currentUser.userId) {
-      router.replace("/");
-    }
-  }, [currentUser.userId]);
+    if (user) terapkanProfil(user);
+  }, [user, terapkanProfil]);
 
   // [REVISI 3] Ambil data profil terbaru dari server (NIM, semester, dll.)
   useEffect(() => {
@@ -536,7 +563,7 @@ export default function Dashboard() {
     if (!code) return;
     try {
       await Clipboard.setStringAsync(code);
-      Alert.alert("Disalin! 📋", `Kode kelas "${code}" berhasil disalin.`);
+      Alert.alert("Disalin", `Kode kelas "${code}" berhasil disalin.`);
     } catch {
       Alert.alert("Gagal", "Tidak dapat menyalin kode.");
     }
@@ -627,11 +654,12 @@ export default function Dashboard() {
     }
   };
 
-  const handleLogout = async () => {
+    const handleLogout = async () => {
     try {
       await Notifications.cancelAllScheduledNotificationsAsync();
     } catch {}
-    router.replace("/");
+    // Setelah user di-null-kan, _layout.tsx otomatis mengarahkan ke halaman login
+    await logout();
   };
 
   if (!currentUser.userId) {
@@ -810,9 +838,17 @@ export default function Dashboard() {
           activeOpacity={0.8}
         >
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {(currentUser.nama || "D").charAt(0).toUpperCase()}
-            </Text>
+            {currentUser.foto ? (
+              <Image
+                source={{ uri: currentUser.foto }}
+                style={{ width: "100%", height: "100%", borderRadius: 18 }}
+                resizeMode="cover"
+              />
+            ) : (
+              <Text style={styles.avatarText}>
+                {(currentUser.nama || "D").charAt(0).toUpperCase()}
+              </Text>
+            )}
           </View>
         </TouchableOpacity>
       </View>
@@ -859,7 +895,7 @@ export default function Dashboard() {
         >
           {loadError ? (
             <View style={styles.errorBanner}>
-              <Text style={styles.errorText}>⚠️ {loadError}</Text>
+              <Text style={styles.errorText}>{loadError}</Text>
             </View>
           ) : null}
 
@@ -867,10 +903,9 @@ export default function Dashboard() {
           <View style={styles.greetingCard}>
             <View style={styles.greetingLeft}>
               <Text style={styles.greetingTitle}>
-                Halo, {currentUser.nama}! 👋
+                Halo, {currentUser.nama}!
               </Text>
               <View style={styles.nimRow}>
-                <Text style={styles.nimIcon}>🪪</Text>
                 <Text style={styles.nimText}>
                   NIM : {currentUser.nim || "-"}
                   {currentUser.semester ? (
@@ -882,16 +917,25 @@ export default function Dashboard() {
               </View>
             </View>
 
-            <View style={styles.greetingAvatarBox}>
+            <TouchableOpacity
+              style={styles.greetingAvatarBox}
+              onPress={() => setActiveTab("profil")}
+              activeOpacity={0.8}
+            >
               <View style={styles.greetingAvatar}>
-                <Text style={styles.greetingAvatarText}>
-                  {(currentUser.nama || "D").charAt(0).toUpperCase()}
-                </Text>
+                {currentUser.foto ? (
+                  <Image
+                    source={{ uri: currentUser.foto }}
+                    style={{ width: "100%", height: "100%", borderRadius: 24 }}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <Text style={styles.greetingAvatarText}>
+                    {(currentUser.nama || "D").charAt(0).toUpperCase()}
+                  </Text>
+                )}
               </View>
-              <View style={styles.cameraBadge}>
-                <Text style={styles.cameraIcon}>📸</Text>
-              </View>
-            </View>
+            </TouchableOpacity>
           </View>
 
           {/* DUA KARTU AKSI CEPAT: [ BUAT KELAS ] & [ GABUNG KELAS ] */}
@@ -903,7 +947,7 @@ export default function Dashboard() {
               activeOpacity={0.85}
             >
               <View style={styles.actionIconCirclePrimary}>
-                <Text style={styles.actionEmojiPrimary}>⊕</Text>
+                <Ionicons name="add" size={20} color="#FFFFFF" />
               </View>
               <Text style={styles.actionCardTitlePrimary}>Buat Kelas</Text>
               <Text style={styles.actionCardSubtitlePrimary}>
@@ -918,7 +962,7 @@ export default function Dashboard() {
               activeOpacity={0.85}
             >
               <View style={styles.actionIconCircleSecondary}>
-                <Text style={styles.actionEmojiSecondary}>🔑</Text>
+                <Ionicons name="enter-outline" size={18} color="#0047BA" />
               </View>
               <Text style={styles.actionCardTitleSecondary}>Gabung Kelas</Text>
               <Text style={styles.actionCardSubtitleSecondary}>
@@ -929,33 +973,45 @@ export default function Dashboard() {
 
           {/* RINGKASAN TUGAS & DEADLINE CEPAT */}
           <View style={styles.statsRow}>
-            {/* KARTU 1: TUGAS BELUM SELESAI */}
-            <View style={styles.statCardLeft}>
+            {/* KARTU 1: TUGAS BELUM SELESAI (REVISI 8: KLIK UNTUK LIHAT DAFTAR & SOLUSI) */}
+            <TouchableOpacity
+              style={styles.statCardLeft}
+              onPress={() => setPendingTasksModalVisible(true)}
+              activeOpacity={0.85}
+            >
               <View style={styles.statHeaderRow}>
                 <View style={styles.statIconBoxBlue}>
-                  <Text style={styles.statIconEmoji}>📄</Text>
+                  <Text style={styles.statIconEmoji}>Tugas</Text>
                 </View>
                 <View style={styles.activePill}>
-                  <Text style={styles.activePillText}>Aktif!</Text>
+                  <Text style={styles.activePillText}>Buka Solusi</Text>
                 </View>
               </View>
               <Text style={styles.statCardSubtitle}>Tugas Belum Selesai</Text>
               <Text style={styles.statCardBigNumber}>
                 {unfinishedTasks.length} <Text style={styles.statCardSmallText}>Tugas</Text>
               </Text>
-            </View>
+            </TouchableOpacity>
 
-            {/* KARTU 2: DEADLINE TERDEKAT (label H-n sesuai tenggat yang diinput) */}
-            <View style={styles.statCardRight}>
+            {/* KARTU 2: DEADLINE TERDEKAT (REVISI 8: KLIK UNTUK REAL-TIME COUNTDOWN DETIK) */}
+            <TouchableOpacity
+              style={styles.statCardRight}
+              onPress={() => setNearestDeadlineModalVisible(true)}
+              activeOpacity={0.85}
+            >
               <View style={styles.statHeaderRow}>
                 <View style={styles.statIconBoxOrange}>
-                  <Text style={styles.statIconEmoji}>⏰</Text>
+                  <Text style={styles.statIconEmoji}>Batas</Text>
                 </View>
                 {nearestLabelHari ? (
                   <View style={styles.h1Pill}>
                     <Text style={styles.h1PillText}>{nearestLabelHari}</Text>
                   </View>
-                ) : null}
+                ) : (
+                  <View style={styles.activePill}>
+                    <Text style={styles.activePillText}>Live Detik</Text>
+                  </View>
+                )}
               </View>
               <Text style={styles.statCardSubtitle}>Deadline Terdekat</Text>
               <Text
@@ -963,12 +1019,12 @@ export default function Dashboard() {
                 numberOfLines={1}
                 ellipsizeMode="tail"
               >
-                {nearestTask ? nearestTask.subject : "Semua Selesai 🎉"}
+                {nearestTask ? nearestTask.subject : "Semua Selesai"}
               </Text>
               <Text style={styles.statCardNearTime}>
                 {nearestTask ? nearestTask.countdown || nearestTask.deadline : "Tidak ada tugas"}
               </Text>
-            </View>
+            </TouchableOpacity>
           </View>
 
           {/* TOMBOL FITUR TAMBAHAN: KALENDER DEADLINE & STATISTIK SAYA */}
@@ -978,7 +1034,6 @@ export default function Dashboard() {
               onPress={() => setKalenderVisible(true)}
               activeOpacity={0.8}
             >
-              <Text style={styles.featurePillIcon}>📅</Text>
               <Text style={styles.featurePillText}>Kalender Deadline</Text>
             </TouchableOpacity>
 
@@ -987,8 +1042,7 @@ export default function Dashboard() {
               onPress={() => setStatistikVisible(true)}
               activeOpacity={0.8}
             >
-              <Text style={styles.featurePillIcon}>📊</Text>
-              <Text style={styles.featurePillText}>Statistik Saya</Text>
+              <Text style={styles.featurePillText}>Statistik Akademik</Text>
             </TouchableOpacity>
           </View>
 
@@ -1023,7 +1077,7 @@ export default function Dashboard() {
             /* EMPTY STATE MAHASISWA BARU (0 KELAS) */
             <View style={styles.emptyClassCard}>
               <View style={styles.emptyIconCircle}>
-                <Text style={styles.emptyEmoji}>🎓</Text>
+                <Text style={styles.emptyEmoji}>KELAS</Text>
               </View>
               <Text style={styles.emptyTitle}>Belum Terdaftar di Kelas Manapun</Text>
               <Text style={styles.emptyDesc}>
@@ -1089,7 +1143,7 @@ export default function Dashboard() {
                         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                       >
                         <Text style={styles.codeChipText}>
-                          🔑 {cls.code}
+                          Kode: {cls.code}
                         </Text>
                       </TouchableOpacity>
                     ) : null}
@@ -1114,7 +1168,7 @@ export default function Dashboard() {
                   <View style={styles.classCardFooter}>
                     <View style={styles.classMetaRow}>
                       <Text style={styles.matkulMeta}>
-                        👥 {cls.members} Anggota
+                        {cls.members} Anggota
                       </Text>
                       <View
                         style={[
@@ -1128,7 +1182,7 @@ export default function Dashboard() {
                             activeCount > 0 && styles.activeTaskTextHighlight,
                           ]}
                         >
-                          ⚡ {activeCount} Tugas Aktif
+                          {activeCount} Tugas Aktif
                         </Text>
                       </View>
                     </View>
@@ -1209,7 +1263,7 @@ export default function Dashboard() {
                 {taskFilter === "selesai"
                   ? "Belum ada tugas selesai"
                   : taskFilter === "belum"
-                  ? "Semua tugas telah diselesaikan! 🎉"
+                  ? "Semua tugas telah diselesaikan"
                   : "Belum ada tugas di kelas Anda"}
               </Text>
             </View>
@@ -1244,8 +1298,8 @@ export default function Dashboard() {
                         ]}
                       >
                         {isFinished
-                          ? "✓ Selesai"
-                          : `🏆 ${t.countdown || t.deadline}`}
+                          ? "Selesai"
+                          : t.countdown || t.deadline}
                       </Text>
                     </View>
 
@@ -1289,10 +1343,10 @@ export default function Dashboard() {
 
                   {/* INFO PEMBUAT & TENGGAT SESUAI INPUT */}
                   <Text style={styles.taskCreatorText}>
-                    👤 {t.creator}
+                    {t.creator}
                   </Text>
                   <Text style={styles.taskDeadlineText}>
-                    🗓️ Tenggat: {t.deadline}
+                    Tenggat: {t.deadline}
                   </Text>
 
                   {/* FOOTER TUGAS: STATUS BADGE */}
@@ -1325,7 +1379,7 @@ export default function Dashboard() {
           {/* [REVISI 1] Banner online (menggantikan teks "data lokal / jaringan pulih") */}
           <View style={styles.bottomSyncCard}>
             <View style={styles.bottomSyncIconBox}>
-              <Text style={styles.bottomSyncEmoji}>🔄</Text>
+              <Ionicons name="cloud-done-outline" size={20} color="#0047BA" />
             </View>
             <View style={styles.bottomSyncContent}>
               <Text style={styles.bottomSyncTitle}>Sinkronisasi Online</Text>
@@ -1374,7 +1428,11 @@ export default function Dashboard() {
               activeOpacity={0.7}
             >
               <View style={styles.navIconBox}>
-                <Text style={styles.navIconEmoji}>{item.icon}</Text>
+                <Ionicons
+                  name={isActive ? (item.iconFilled as any) : (item.iconOutline as any)}
+                  size={22}
+                  color={isActive ? "#0047BA" : "#64748B"}
+                />
                 {item.key === "notifikasi" && unreadNotifCount > 0 ? (
                   <View style={styles.notifBadge}>
                     <Text style={styles.notifBadgeText}>
@@ -1406,7 +1464,7 @@ export default function Dashboard() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>📅 Kalender Deadline</Text>
+              <Text style={styles.modalTitle}>Kalender Deadline</Text>
               <TouchableOpacity
                 onPress={() => setKalenderVisible(false)}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -1439,7 +1497,7 @@ export default function Dashboard() {
                       <Text style={styles.calendarItemTitle}>{t.title}</Text>
                       <Text style={styles.calendarItemSubject}>{t.subject}</Text>
                       <Text style={styles.calendarItemCountdown}>
-                        ⏰ {t.status === "Selesai" ? "Selesai" : t.countdown || t.deadline}
+                        {t.status === "Selesai" ? "Selesai" : t.countdown || t.deadline}
                       </Text>
                     </View>
                   </View>
@@ -1467,7 +1525,7 @@ export default function Dashboard() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>📊 Statistik Akademik</Text>
+              <Text style={styles.modalTitle}>Statistik Akademik</Text>
               <TouchableOpacity
                 onPress={() => setStatistikVisible(false)}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -1528,6 +1586,34 @@ export default function Dashboard() {
           </View>
         </View>
       </Modal>
+
+      {/* REVISI 8: MODAL TUGAS BELUM SELESAI DENGAN TIPS & CHECKLIST */}
+      <PendingTasksComp
+        visible={pendingTasksModalVisible}
+        tasks={unfinishedTasks}
+        onClose={() => setPendingTasksModalVisible(false)}
+        onOpenTask={(t: any) => {
+          setSelectedTask(t);
+          setSubView("detail-tugas");
+        }}
+        onToggleTask={(taskId: any, nextStatus: string) => {
+          handleToggleTaskStatus(taskId, nextStatus);
+        }}
+      />
+
+      {/* REVISI 8: MODAL DEADLINE TERDEKAT DENGAN REAL-TIME TICKING SECONDS COUNTDOWN */}
+      <NearestDeadlineComp
+        visible={nearestDeadlineModalVisible}
+        task={nearestTask}
+        onClose={() => setNearestDeadlineModalVisible(false)}
+        onOpenTask={(t: any) => {
+          setSelectedTask(t);
+          setSubView("detail-tugas");
+        }}
+        onToggleTask={(taskId: any, nextStatus: string) => {
+          handleToggleTaskStatus(taskId, nextStatus);
+        }}
+      />
     </SafeAreaView>
   );
 }

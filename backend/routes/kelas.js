@@ -171,6 +171,59 @@ router.get("/:id", async (req, res) => {
 });
 
 // =========================================================================
+// [REVISI 9] PUT /api/kelas/:id -> PJMK Utama dapat mengedit nama kelas
+// - Nama kelas harus unik (tidak boleh sama dengan kelas lain)
+// - Hanya PJMK Utama yang berhak
+// =========================================================================
+router.put("/:id", async (req, res) => {
+  const { id } = req.params;
+  const { nama_kelas, oleh } = req.body;
+
+  if (!nama_kelas || !nama_kelas.trim() || !oleh) {
+    return res.status(400).json({ pesan: "nama_kelas dan oleh (id PJMK Utama) wajib diisi" });
+  }
+
+  const namaBersih = nama_kelas.trim().replace(/\s+/g, " ");
+
+  try {
+    const peranPengubah = await getPeran(id, oleh);
+    if (!isUtama(peranPengubah)) {
+      return res.status(403).json({ pesan: "Hanya PJMK Utama yang dapat mengubah nama kelas." });
+    }
+
+    // Cek duplikasi nama kelas lain
+    const [duplikat] = await pool.query(
+      `SELECT KELAS_ID FROM KELAS
+       WHERE LOWER(TRIM(NAMA_KELAS)) = LOWER(?) AND KELAS_ID <> ? LIMIT 1`,
+      [namaBersih, id]
+    );
+
+    if (duplikat.length > 0) {
+      return res.status(409).json({
+        pesan: "Kelas dengan nama ini sudah ada. Gunakan nama kelas yang berbeda.",
+      });
+    }
+
+    const [hasil] = await pool.query(
+      `UPDATE KELAS SET NAMA_KELAS = ? WHERE KELAS_ID = ?`,
+      [namaBersih, id]
+    );
+
+    if (hasil.affectedRows === 0) {
+      return res.status(404).json({ pesan: "Kelas tidak ditemukan" });
+    }
+
+    res.json({
+      pesan: "Nama kelas berhasil diperbarui",
+      nama_kelas: namaBersih,
+    });
+  } catch (e) {
+    console.error("Gagal mengubah nama kelas:", e);
+    res.status(500).json({ pesan: "Gagal mengubah nama kelas", error: e.message });
+  }
+});
+
+// =========================================================================
 // POST /api/kelas -> buat kelas baru
 // - Nama kelas tidak boleh sama dengan kelas yang sudah ada (409)
 // - [REVISI 2] User yang sudah jadi PJMK di kelas lain tidak boleh membuat kelas (403)
@@ -260,7 +313,7 @@ router.post("/", async (req, res) => {
 // POST /api/kelas/join -> gabung kelas dengan kode (sebagai Mahasiswa)
 // =========================================================================
 router.post("/join", async (req, res) => {
-  const { kode_kelas, user_id, userId } = req.body;
+  const { kode_kelas, user_id, userId, semester } = req.body;
   const finalUserId = user_id || userId;
 
   if (!kode_kelas || !finalUserId) {
@@ -285,6 +338,14 @@ router.post("/join", async (req, res) => {
     );
     if (userRows.length === 0) {
       return res.status(404).json({ pesan: "Akun tidak ditemukan. Silakan login ulang." });
+    }
+
+    // Jika semester dikirim saat gabung kelas (semester 1 ke atas, 1-14), perbarui data mahasiswa
+    if (semester !== undefined && semester !== null && String(semester).trim() !== "") {
+      const semAngka = Number(semester);
+      if (Number.isInteger(semAngka) && semAngka >= 1 && semAngka <= 14) {
+        await pool.query(`UPDATE USER SET SEMESTER = ? WHERE USER_ID = ?`, [semAngka, finalUserId]);
+      }
     }
 
     const [existing] = await pool.query(
@@ -348,8 +409,21 @@ router.put("/:id/anggota/:userId/peran", async (req, res) => {
       return res.status(400).json({ pesan: "Peran PJMK Utama tidak dapat diubah." });
     }
 
-    // [REVISI 2] Cek PJMK di kelas lain hanya saat akan dijadikan pendamping
+    // [REVISI 9] Kuota maksimal PJMK per mata kuliah adalah 2 (1 PJMK Utama + 1 PJMK Pendamping)
     if (peran === PERAN_PENDAMPING) {
+      const [pjmkCount] = await pool.query(
+        `SELECT COUNT(*) AS total FROM ANGGOTA_KELAS
+         WHERE KELAS_ID = ? AND (PERAN LIKE '%PJMK Utama%' OR PERAN LIKE '%PJMK Pendamping%')`,
+        [id]
+      );
+      if (pjmkCount[0]?.total >= 2) {
+        return res.status(400).json({
+          pesan:
+            "Mata kuliah ini sudah memiliki 2 PJMK (PJMK Utama dan PJMK Pendamping). Kuota PJMK sudah penuh.",
+        });
+      }
+
+      // [REVISI 2] Cek PJMK di kelas lain hanya saat akan dijadikan pendamping
       const pjmkLain = await cariPeranPjmkLain(userId, id);
       if (pjmkLain) {
         return res.status(403).json({

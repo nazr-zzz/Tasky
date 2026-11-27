@@ -18,11 +18,20 @@ export default function GabungKelasScreen({
   onClassJoined,
 }) {
   const [kodeKelas, setKodeKelas] = useState("");
+  const [semester, setSemester] = useState(
+    currentUser?.semester ? String(currentUser.semester) : "1"
+  );
   const [loading, setLoading] = useState(false);
 
   const handleGabung = async () => {
     if (!kodeKelas.trim()) {
       Alert.alert("Perhatian", "Masukkan kode kelas (contoh: TI21-A89K).");
+      return;
+    }
+
+    const semAngka = Number(semester);
+    if (!Number.isInteger(semAngka) || semAngka < 1 || semAngka > 14) {
+      Alert.alert("Perhatian", "Semester harus berupa angka antara 1 sampai 14.");
       return;
     }
 
@@ -34,7 +43,7 @@ export default function GabungKelasScreen({
     setLoading(true);
     try {
       const kode = kodeKelas.trim().toUpperCase();
-      const res = await joinClass(kode, currentUser.userId);
+      const res = await joinClass(kode, currentUser.userId, semAngka);
 
       const targetClass = res?.kelas || { kode_kelas: kode };
       const namaKelas =
@@ -46,7 +55,7 @@ export default function GabungKelasScreen({
           ? `Selamat! Anda telah resmi bergabung ke kelas "${namaKelas}".`
           : "Selamat! Anda telah resmi bergabung ke kelas."
       );
-      if (onClassJoined) await onClassJoined(targetClass);
+      if (onClassJoined) await onClassJoined({ ...targetClass, semester: semAngka });
       if (onBack) onBack();
     } catch (e) {
       Alert.alert(
@@ -90,7 +99,7 @@ export default function GabungKelasScreen({
       >
         <View style={styles.heroSection}>
           <View style={styles.heroIconCircle}>
-            <Text style={styles.heroEmoji}>👥🎓</Text>
+            <Text style={styles.heroIconText}>KODE</Text>
           </View>
           <Text style={styles.heroTitle}>Masukkan Kode Kelas</Text>
           <Text style={styles.heroSubtitle}>
@@ -98,11 +107,10 @@ export default function GabungKelasScreen({
           </Text>
         </View>
 
-        {/* INPUT KODE KELAS */}
+        {/* INPUT KODE KELAS & SEMESTER */}
         <View style={styles.inputCard}>
           <Text style={styles.inputLabel}>KODE KELAS</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.inputIcon}>⌨️</Text>
             <TextInput
               style={styles.textInput}
               placeholder="MISAL: TI21-A89K"
@@ -117,6 +125,45 @@ export default function GabungKelasScreen({
           <View style={styles.counterRow}>
             <Text style={styles.counterHint}>ⓘ Format kode 6-8 karakter</Text>
             <Text style={styles.counterText}>{kodeKelas.length}/10</Text>
+          </View>
+
+          {/* REVISI 1: FORM PENGISIAN SEMESTER (SEMESTER 1 KE ATAS) */}
+          <Text style={[styles.inputLabel, { marginTop: 14 }]}>
+            SEMESTER ANDA (SEMESTER 1 KE ATAS)
+          </Text>
+          <View style={styles.inputBox}>
+            <TextInput
+              style={styles.textInput}
+              placeholder="Pilih atau ketik semester (1 - 14)"
+              placeholderTextColor="#94A3B8"
+              value={semester}
+              onChangeText={(t) => setSemester(t.replace(/[^0-9]/g, "").slice(0, 2))}
+              keyboardType="number-pad"
+            />
+          </View>
+
+          {/* Quick chip semester 1 - 8 */}
+          <View style={styles.semesterChipsRow}>
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((s) => (
+              <TouchableOpacity
+                key={s}
+                style={[
+                  styles.semChip,
+                  semester === String(s) && styles.semChipActive,
+                ]}
+                onPress={() => setSemester(String(s))}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[
+                    styles.semChipText,
+                    semester === String(s) && styles.semChipTextActive,
+                  ]}
+                >
+                  Smt {s}
+                </Text>
+              </TouchableOpacity>
+            ))}
           </View>
 
           <TouchableOpacity
@@ -137,7 +184,7 @@ export default function GabungKelasScreen({
                   !kodeKelas.trim() && styles.joinBtnTextDisabled,
                 ]}
               >
-                Gabung
+                Gabung Kelas
               </Text>
             )}
           </TouchableOpacity>
@@ -145,7 +192,9 @@ export default function GabungKelasScreen({
 
         {/* INFO SINKRONISASI */}
         <View style={styles.featureCard}>
-          <Text style={styles.featureIcon}>✨</Text>
+          <View style={styles.featurePill}>
+            <Text style={styles.featurePillText}>OTOMATIS</Text>
+          </View>
           <View style={styles.featureContent}>
             <Text style={styles.featureTitle}>Tersinkronisasi Otomatis</Text>
             <Text style={styles.featureDesc}>
@@ -241,9 +290,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
   },
-  heroEmoji: {
-    fontSize: 28,
+  heroIconText: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: "#1D4ED8",
+    letterSpacing: 1.2,
   },
   heroTitle: {
     fontSize: 20,
@@ -298,7 +352,49 @@ const styles = StyleSheet.create({
   counterRow: {
     flexDirection: "row",
     justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  semesterChipsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 8,
     marginBottom: 16,
+  },
+  semChip: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: "#F1F5F9",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  semChipActive: {
+    backgroundColor: "#DBEAFE",
+    borderColor: "#2563EB",
+  },
+  semChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#64748B",
+  },
+  semChipTextActive: {
+    color: "#1D4ED8",
+  },
+  featurePill: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    marginRight: 10,
+  },
+  featurePillText: {
+    fontSize: 9,
+    fontWeight: "900",
+    color: "#1D4ED8",
+    letterSpacing: 0.8,
   },
   counterHint: {
     fontSize: 11,
