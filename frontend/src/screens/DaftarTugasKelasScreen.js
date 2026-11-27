@@ -1,8 +1,19 @@
 import React, { useState } from "react";
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from "react-native";
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  Modal,
+  TextInput,
+  ActivityIndicator,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import ScreenHeader from "../components/BackButton";
+import { updateClassName } from "../services/api";
 import { pick, getTaskDeadlineDate, getDeadlineText, formatCountdown } from "../utils/deadline";
 
 // Warna badge mata kuliah dibuat dinamis dari nama matkul
@@ -39,8 +50,18 @@ export default function DaftarTugasKelasScreen({
       String(kelas?.role || "").toLowerCase().includes("wakil") ||
       Boolean(kelas?.isPjmk));
 
+  const isPJMKUtama =
+    kelas?.isUtama ??
+    (String(kelas?.role || "").toLowerCase().includes("utama") ||
+      String(kelas?.dibuat_oleh) === String(currentUser?.userId));
+
   const currentClass = kelas || {};
   const namaKelas = currentClass.name || currentClass.nama_kelas || "Kelas";
+  const [namaKelasState, setNamaKelasState] = useState(namaKelas);
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [inputNamaBaru, setInputNamaBaru] = useState(namaKelas);
+  const [savingNama, setSavingNama] = useState(false);
+
   const kodeKelas = currentClass.code || currentClass.kode_kelas || "-";
   const jumlahAnggota = currentClass.members ?? currentClass.jumlah_anggota ?? 0;
 
@@ -62,9 +83,27 @@ export default function DaftarTugasKelasScreen({
   const handleCopyCode = async () => {
     try {
       await Clipboard.setStringAsync(kodeKelas);
-      Alert.alert("Disalin! 📋", `Kode kelas "${kodeKelas}" telah disalin.`);
+      Alert.alert("Disalin", `Kode kelas "${kodeKelas}" telah disalin.`);
     } catch {
       Alert.alert("Gagal", "Tidak dapat menyalin kode.");
+    }
+  };
+
+  const handleSaveClassName = async () => {
+    if (!inputNamaBaru.trim()) {
+      Alert.alert("Perhatian", "Nama kelas tidak boleh kosong.");
+      return;
+    }
+    setSavingNama(true);
+    try {
+      await updateClassName(currentClass.kelas_id, inputNamaBaru.trim(), currentUser?.userId);
+      setNamaKelasState(inputNamaBaru.trim());
+      setEditModalVisible(false);
+      Alert.alert("Berhasil", "Nama kelas berhasil diperbarui.");
+    } catch (e) {
+      Alert.alert("Gagal Mengubah Nama", e?.message || "Tidak dapat terhubung ke server.");
+    } finally {
+      setSavingNama(false);
     }
   };
 
@@ -92,40 +131,57 @@ export default function DaftarTugasKelasScreen({
         <View style={styles.classHeaderCard}>
           <View style={styles.classMetaRow}>
             {semesterText ? (
-              <Text style={styles.semesterTag}>🎓 {semesterText}</Text>
+              <Text style={styles.semesterTag}>{semesterText}</Text>
             ) : (
               <View />
             )}
             {isPJMK ? (
               <View style={styles.pjmkPill}>
-                <Text style={styles.pjmkPillText}>👑 Anda PJMK Kelas Ini</Text>
+                <Text style={styles.pjmkPillText}>
+                  {isPJMKUtama ? "PJMK Utama" : "PJMK Pendamping"}
+                </Text>
               </View>
             ) : (
               <View style={styles.mhsPill}>
-                <Text style={styles.mhsPillText}>👤 Mahasiswa Anggota</Text>
+                <Text style={styles.mhsPillText}>Mahasiswa Anggota</Text>
               </View>
             )}
           </View>
 
-          <Text style={styles.classTitle}>{namaKelas}</Text>
+          <View style={styles.titleWithEditRow}>
+            <Text style={styles.classTitle}>{namaKelasState}</Text>
+            {isPJMKUtama && (
+              <TouchableOpacity
+                style={styles.editClassNameBtn}
+                onPress={() => {
+                  setInputNamaBaru(namaKelasState);
+                  setEditModalVisible(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.editClassNameBtnText}>Edit Nama</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
           {!!subtitleKelas && <Text style={styles.classSubtitle}>{subtitleKelas}</Text>}
 
           <View style={styles.chipsRow}>
             <TouchableOpacity style={styles.codeChip} onPress={handleCopyCode}>
               <Text style={styles.codeChipText}>
-                🔑 {kodeKelas} <Text style={styles.salinLink}>Salin</Text>
+                Kode: {kodeKelas} <Text style={styles.salinLink}>Salin</Text>
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.memberChip} onPress={onOpenMembers} activeOpacity={0.8}>
-              <Text style={styles.memberChipText}>👥 {jumlahAnggota} Mahasiswa ›</Text>
+              <Text style={styles.memberChipText}>{jumlahAnggota} Mahasiswa ›</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.infoBtn}
               onPress={() =>
                 Alert.alert(
-                  namaKelas,
+                  namaKelasState,
                   `Kode Undangan: ${kodeKelas}\nTotal Mahasiswa: ${jumlahAnggota}${
                     semesterText ? `\n${semesterText}` : ""
                   }`
@@ -208,7 +264,7 @@ export default function DaftarTugasKelasScreen({
                   ]}
                   numberOfLines={1}
                 >
-                  {cd && !isDone ? `${cd.overdue ? "🔴" : "⏳"} ${cd.text}` : `📅 ${deadlineText}`}
+                  {cd && !isDone ? cd.text : deadlineText}
                 </Text>
               </View>
 
@@ -220,12 +276,12 @@ export default function DaftarTugasKelasScreen({
                 </Text>
               )}
 
-              <Text style={styles.taskDeadlineLine}>📅 {deadlineText}</Text>
-              {!!pembuat && <Text style={styles.taskCreatorText}>📝 Dicatat oleh {pembuat}</Text>}
+              <Text style={styles.taskDeadlineLine}>Tenggat: {deadlineText}</Text>
+              {!!pembuat && <Text style={styles.taskCreatorText}>Dicatat oleh {pembuat}</Text>}
 
               <View style={styles.taskFooterRow}>
                 <Text style={styles.attachmentLink} numberOfLines={1}>
-                  {link ? "🔗 Ada tautan pengumpulan" : "📁 Lihat detail"}
+                  {link ? "Ada tautan pengumpulan" : "Lihat detail"}
                 </Text>
 
                 <TouchableOpacity
@@ -235,7 +291,7 @@ export default function DaftarTugasKelasScreen({
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
                   <Text style={[styles.statusPillText, isDone ? styles.textDone : styles.textPending]}>
-                    {isDone ? "✔ Selesai" : "⭕ Belum Dikerjakan"}
+                    {isDone ? "Selesai" : "Belum Dikerjakan"}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -260,6 +316,63 @@ export default function DaftarTugasKelasScreen({
           </TouchableOpacity>
         </View>
       )}
+
+      {/* MODAL UBAH NAMA KELAS (REVISI 9) */}
+      <Modal
+        visible={editModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setEditModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalHeaderTitle}>Ubah Nama Kelas</Text>
+              <TouchableOpacity
+                onPress={() => setEditModalVisible(false)}
+                style={styles.modalCloseBtn}
+              >
+                <Text style={styles.modalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalHint}>
+              Sebagai PJMK Utama, Anda dapat memperbaiki nama kelas jika ada kesalahan penulisan. Nama kelas harus unik dan berbeda dari kelas yang sudah ada.
+            </Text>
+
+            <Text style={styles.inputFieldLabel}>NAMA MATA KULIAH & KELAS</Text>
+            <TextInput
+              style={styles.textInputModal}
+              value={inputNamaBaru}
+              onChangeText={setInputNamaBaru}
+              placeholder="Contoh: Pemrograman Mobile - Kelas A"
+              placeholderTextColor="#94A3B8"
+            />
+
+            <View style={styles.modalActionRow}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => setEditModalVisible(false)}
+                disabled={savingNama}
+              >
+                <Text style={styles.modalCancelText}>Batal</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.modalSaveBtn}
+                onPress={handleSaveClassName}
+                disabled={savingNama}
+              >
+                {savingNama ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.modalSaveText}>Simpan Perubahan</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -407,4 +520,119 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
   fabBtnText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
+
+  // EDIT NAMA KELAS STYLES
+  titleWithEditRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 4,
+    gap: 8,
+  },
+  editClassNameBtn: {
+    backgroundColor: "#EFF6FF",
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+  },
+  editClassNameBtnText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#1D4ED8",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 18,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    padding: 20,
+    elevation: 10,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  modalHeaderTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#F1F5F9",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalCloseText: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#64748B",
+  },
+  modalHint: {
+    fontSize: 11,
+    color: "#64748B",
+    lineHeight: 16,
+    marginBottom: 14,
+  },
+  inputFieldLabel: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#64748B",
+    letterSpacing: 0.6,
+    marginBottom: 6,
+  },
+  textInputModal: {
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13,
+    color: "#0F172A",
+    backgroundColor: "#F8FAFC",
+    marginBottom: 16,
+  },
+  modalActionRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  modalCancelBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: "#F1F5F9",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalCancelText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#64748B",
+  },
+  modalSaveBtn: {
+    flex: 2,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: "#0047BA",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalSaveText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
 });

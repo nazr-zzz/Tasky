@@ -18,6 +18,7 @@ import {
   updateNote,
   deleteNote,
 } from "../services/api";
+import { Ionicons } from "@expo/vector-icons";
 
 // =========================================================================
 // HELPER: PEMETAAN DATA CATATAN DARI SERVER
@@ -348,7 +349,7 @@ export default function CatatanScreen({ currentUser, activeClass }) {
       <View style={styles.privacyCard}>
 
         <View style={styles.lockCircle}>
-          <Text style={styles.lockIcon}>🔒</Text>
+          <Ionicons name="lock-closed" size={16} color="#0047BA" />
         </View>
 
         <View style={styles.privacyContent}>
@@ -395,7 +396,7 @@ export default function CatatanScreen({ currentUser, activeClass }) {
                     activeFilter === m && styles.filterChipTextActive
                   ]}
                 >
-                  {activeFilter === m ? "✔ " : ""}
+                  {activeFilter === m ? "✓ " : ""}
                   {m}
                 </Text>
 
@@ -419,8 +420,8 @@ export default function CatatanScreen({ currentUser, activeClass }) {
 
         <Text style={styles.formTitle}>
           {editingNote
-            ? "✏️ Edit Catatan"
-            : "✍️ Tulis Catatan Baru"}
+            ? "Edit Catatan"
+            : "Tulis Catatan Baru"}
         </Text>
 
         <Text style={styles.inputLabel}>
@@ -595,7 +596,7 @@ export default function CatatanScreen({ currentUser, activeClass }) {
             onPress={onRefresh}
           >
             <Text style={styles.retryBtnText}>
-              🔄 Coba Lagi
+              Coba Lagi
             </Text>
           </TouchableOpacity>
 
@@ -605,9 +606,7 @@ export default function CatatanScreen({ currentUser, activeClass }) {
 
         <View style={styles.stateBox}>
 
-          <Text style={styles.emptyIcon}>
-            📝
-          </Text>
+          <Ionicons name="document-text-outline" size={40} color="#94A3B8" style={{ marginBottom: 8 }} />
 
           <Text style={styles.stateText}>
             Belum ada catatan.
@@ -658,9 +657,7 @@ export default function CatatanScreen({ currentUser, activeClass }) {
                   activeOpacity={0.7}
                 >
 
-                  <Text style={styles.actionIcon}>
-                    ✏️
-                  </Text>
+                  <Ionicons name="pencil" size={16} color="#0047BA" />
 
                 </TouchableOpacity>
 
@@ -672,9 +669,7 @@ export default function CatatanScreen({ currentUser, activeClass }) {
                   activeOpacity={0.7}
                 >
 
-                  <Text style={styles.actionIcon}>
-                    🗑️
-                  </Text>
+                  <Ionicons name="trash-outline" size={16} color="#EF4444" />
 
                 </TouchableOpacity>
 
@@ -699,7 +694,7 @@ export default function CatatanScreen({ currentUser, activeClass }) {
             <View style={styles.noteFooter}>
 
               <Text style={styles.noteTimeText}>
-                🕒 {note.time}
+                {note.time}
               </Text>
 
             </View>

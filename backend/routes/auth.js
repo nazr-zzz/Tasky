@@ -6,6 +6,29 @@ import { kirimEmailKode } from "../mailer.js";
 
 const router = express.Router();
 
+// Buat tabel reset password otomatis kalau belum ada
+let tabelResetSiap = false;
+async function pastikanTabelReset() {
+  if (tabelResetSiap) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_reset (
+      ID INT AUTO_INCREMENT PRIMARY KEY,
+      USER_ID VARCHAR(36) NOT NULL,
+      KODE_HASH VARCHAR(255) NOT NULL,
+      EXPIRES_AT DATETIME NOT NULL,
+      ATTEMPTS INT NOT NULL DEFAULT 0,
+      CREATED_AT TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_pr_user (USER_ID)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  tabelResetSiap = true;
+}
+
+const pesanServer = (error) =>
+  process.env.NODE_ENV === "production"
+    ? "Terjadi kesalahan pada server."
+    : `Terjadi kesalahan pada server: ${error.message}`;
+
 // Semester valid: 1-14, boleh kosong (null)
 function parseSemester(nilai) {
   if (nilai === undefined || nilai === null || String(nilai).trim() === "") {
@@ -17,6 +40,9 @@ function parseSemester(nilai) {
   }
   return { ok: true, value: angka };
 }
+
+// Rapikan deviceId dari aplikasi (maks 64 karakter sesuai kolom)
+const bersihkanDeviceId = (v) => String(v || "").trim().slice(0, 64);
 
 // =========================================================================
 // POST /api/auth/register: Pendaftaran Mahasiswa Baru (SRS 6.2)
@@ -32,11 +58,15 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    const sem = parseSemester(semester);
-    if (!sem.ok) {
-      return res.status(400).json({
-        pesan: "Semester harus berupa angka 1 sampai 14.",
-      });
+    let semValue = 1;
+    if (semester !== undefined && semester !== null && String(semester).trim() !== "") {
+      const sem = parseSemester(semester);
+      if (!sem.ok) {
+        return res.status(400).json({
+          pesan: "Semester harus berupa angka 1 sampai 14.",
+        });
+      }
+      semValue = sem.value || 1;
     }
 
     const nimBersih = String(nim).trim();
@@ -61,7 +91,7 @@ router.post("/register", async (req, res) => {
       `INSERT INTO user
        (USER_ID, NAMA, NIM, EMAIL, SEMESTER, PASSWORD, CREATED_AT)
        VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-      [userId, namaBersih, nimBersih, emailBersih, sem.value, hashedPassword]
+      [userId, namaBersih, nimBersih, emailBersih, semValue, hashedPassword]
     );
 
     return res.status(201).json({
@@ -71,7 +101,7 @@ router.post("/register", async (req, res) => {
         nama: namaBersih,
         nim: nimBersih,
         email: emailBersih,
-        semester: sem.value,
+        semester: semValue,
       },
     });
   } catch (error) {
@@ -84,10 +114,12 @@ router.post("/register", async (req, res) => {
 
 // =========================================================================
 // POST /api/auth/login: Masuk ke Akun (PJMK atau Mahasiswa)
+// 1 akun = 1 device. Body: { identitas, password, deviceId, force }
 // =========================================================================
 router.post("/login", async (req, res) => {
   try {
-    const { identitas, password } = req.body;
+    const { identitas, password, force } = req.body;
+    const deviceId = bersihkanDeviceId(req.body.deviceId);
 
     if (!identitas || !password) {
       return res.status(400).json({
@@ -95,8 +127,14 @@ router.post("/login", async (req, res) => {
       });
     }
 
+    if (!deviceId) {
+      return res.status(400).json({
+        pesan: "ID perangkat tidak terbaca. Perbarui aplikasi lalu coba lagi.",
+      });
+    }
+
     const [users] = await pool.execute(
-      `SELECT USER_ID, NAMA, NIM, EMAIL, SEMESTER, PASSWORD
+      `SELECT USER_ID, NAMA, NIM, EMAIL, SEMESTER, FOTO, PASSWORD, ACTIVE_DEVICE_ID
        FROM user
        WHERE NIM = ? OR EMAIL = ?
        LIMIT 1`,
@@ -135,6 +173,27 @@ router.post("/login", async (req, res) => {
       });
     }
 
+    // ===== PEMBATASAN 1 AKUN = 1 DEVICE =====
+    // Dicek SETELAH password benar, supaya orang lain tidak bisa
+    // mengintip apakah akun sedang dipakai.
+    const dipakaiPerangkatLain =
+      !!user.ACTIVE_DEVICE_ID && user.ACTIVE_DEVICE_ID !== deviceId;
+
+    if (dipakaiPerangkatLain && force !== true) {
+      return res.status(409).json({
+        kode: "DEVICE_BUSY",
+        pesan:
+          "Akun ini sedang dipakai di perangkat lain. Logout dulu di perangkat tersebut.",
+      });
+    }
+
+    // Kunci akun ke device ini (kalau force, perangkat lama otomatis tertendang
+    // saat cek-sesi berikutnya)
+    await pool.execute("UPDATE user SET ACTIVE_DEVICE_ID = ? WHERE USER_ID = ?", [
+      deviceId,
+      user.USER_ID,
+    ]);
+
     // Ambil info peran pada kelas pertama (jika ada) untuk membedakan PJMK vs Mahasiswa
     const [roles] = await pool.query(
       `SELECT PERAN FROM ANGGOTA_KELAS WHERE USER_ID = ? LIMIT 1`,
@@ -150,6 +209,7 @@ router.post("/login", async (req, res) => {
         nim: user.NIM,
         email: user.EMAIL,
         semester: user.SEMESTER ?? null,
+        foto: user.FOTO ?? null,
         role: role,
       },
     });
@@ -162,12 +222,85 @@ router.post("/login", async (req, res) => {
 });
 
 // =========================================================================
+// POST /api/auth/cek-sesi: apakah device ini masih pemegang sesi akun?
+// Body: { userId, deviceId } -> { aktif: true/false }
+// =========================================================================
+router.post("/cek-sesi", async (req, res) => {
+  try {
+    const userId = String(req.body.userId || "").trim();
+    const deviceId = bersihkanDeviceId(req.body.deviceId);
+
+    if (!userId || !deviceId) {
+      return res.status(400).json({ pesan: "userId dan deviceId wajib diisi." });
+    }
+
+    const [rows] = await pool.execute(
+      "SELECT ACTIVE_DEVICE_ID FROM user WHERE USER_ID = ? LIMIT 1",
+      [userId]
+    );
+
+    // Akun sudah tidak ada -> sesi tidak valid
+    if (rows.length === 0) {
+      return res.status(200).json({ aktif: false });
+    }
+
+    const aktifId = rows[0].ACTIVE_DEVICE_ID;
+
+    // Kolom masih kosong (mis. user yang sudah login sebelum fitur ini ada):
+    // device pertama yang mengecek langsung menjadi pemegang sesi.
+    if (!aktifId) {
+      await pool.execute(
+        "UPDATE user SET ACTIVE_DEVICE_ID = ? WHERE USER_ID = ? AND ACTIVE_DEVICE_ID IS NULL",
+        [deviceId, userId]
+      );
+      const [cek] = await pool.execute(
+        "SELECT ACTIVE_DEVICE_ID FROM user WHERE USER_ID = ? LIMIT 1",
+        [userId]
+      );
+      return res
+        .status(200)
+        .json({ aktif: cek[0]?.ACTIVE_DEVICE_ID === deviceId });
+    }
+
+    return res.status(200).json({ aktif: aktifId === deviceId });
+  } catch (error) {
+    console.error("Cek sesi gagal:", error.message);
+    return res.status(500).json({ pesan: "Terjadi kesalahan pada server." });
+  }
+});
+
+// =========================================================================
+// POST /api/auth/logout: lepas kunci device agar akun bisa dipakai HP lain
+// Body: { userId, deviceId }. Hanya device pemegang sesi yang bisa melepas.
+// =========================================================================
+router.post("/logout", async (req, res) => {
+  try {
+    const userId = String(req.body.userId || "").trim();
+    const deviceId = bersihkanDeviceId(req.body.deviceId);
+
+    if (!userId || !deviceId) {
+      return res.status(400).json({ pesan: "userId dan deviceId wajib diisi." });
+    }
+
+    await pool.execute(
+      "UPDATE user SET ACTIVE_DEVICE_ID = NULL WHERE USER_ID = ? AND ACTIVE_DEVICE_ID = ?",
+      [userId, deviceId]
+    );
+
+    return res.status(200).json({ pesan: "Logout berhasil." });
+  } catch (error) {
+    console.error("Logout gagal:", error.message);
+    return res.status(500).json({ pesan: "Terjadi kesalahan pada server." });
+  }
+});
+
+// =========================================================================
 // GET /api/auth/profile/:userId: Ambil profil lengkap pengguna
 // =========================================================================
 router.get("/profile/:userId", async (req, res) => {
   try {
     const [users] = await pool.query(
-      `SELECT u.USER_ID, u.NAMA, u.NIM, u.EMAIL, u.SEMESTER, u.CREATED_AT,
+      `SELECT u.USER_ID, u.NAMA, u.NIM, u.EMAIL, u.SEMESTER, u.FOTO, u.CREATED_AT,
               (SELECT COUNT(*) FROM ANGGOTA_KELAS ak WHERE ak.USER_ID = u.USER_ID) AS TOTAL_KELAS
        FROM user u
        WHERE u.USER_ID = ?`,
@@ -189,7 +322,7 @@ router.get("/profile/:userId", async (req, res) => {
 // PUT /api/auth/profile/:userId: Perbarui data profil pengguna
 // =========================================================================
 router.put("/profile/:userId", async (req, res) => {
-  const { nama, email, password, semester } = req.body;
+  const { nama, email, password, semester, foto } = req.body;
 
   try {
     const fields = [];
@@ -226,6 +359,11 @@ router.put("/profile/:userId", async (req, res) => {
       params.push(sem.value);
     }
 
+    if (foto !== undefined) {
+      fields.push("FOTO = ?");
+      params.push(foto ? String(foto).trim() : null);
+    }
+
     if (password && String(password).length >= 6) {
       const hashed = await bcrypt.hash(String(password), 10);
       fields.push("PASSWORD = ?");
@@ -259,6 +397,8 @@ router.post("/lupa-password", async (req, res) => {
   const pesanUmum = "Jika email terdaftar, kode verifikasi telah dikirim.";
 
   try {
+    await pastikanTabelReset(); // <-- PERBAIKAN: tabel dibuat otomatis
+
     const email = (req.body.email || "").trim().toLowerCase();
 
     if (!email) {
@@ -327,6 +467,8 @@ router.post("/reset-password", async (req, res) => {
   const pesanSalah = "Kode salah atau sudah kedaluwarsa.";
 
   try {
+    await pastikanTabelReset(); // <-- PERBAIKAN: tabel dibuat otomatis
+
     const email = (req.body.email || "").trim().toLowerCase();
     const kode = String(req.body.kode || "").trim();
     const passwordBaru = req.body.passwordBaru || "";
@@ -382,10 +524,12 @@ router.post("/reset-password", async (req, res) => {
     }
 
     const hashed = await bcrypt.hash(passwordBaru, 10);
-    await pool.execute("UPDATE user SET PASSWORD = ? WHERE USER_ID = ?", [
-      hashed,
-      userId,
-    ]);
+    // Sekalian lepas kunci device: kalau lupa sandi karena HP hilang,
+    // akun tidak tertahan oleh sesi lama.
+    await pool.execute(
+      "UPDATE user SET PASSWORD = ?, ACTIVE_DEVICE_ID = NULL WHERE USER_ID = ?",
+      [hashed, userId]
+    );
     await pool.execute("DELETE FROM password_reset WHERE USER_ID = ?", [
       userId,
     ]);

@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { router } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 import { kirimKodeReset, resetPasswordDenganKode } from "../services/auth";
 
 export default function LupaPasswordScreen() {
@@ -78,7 +79,7 @@ export default function LupaPasswordScreen() {
     try {
       await resetPasswordDenganKode(email.trim(), kode.trim(), passwordBaru);
       Alert.alert(
-        "Berhasil 🎉",
+        "Berhasil",
         "Kata sandi berhasil diubah. Silakan masuk dengan kata sandi baru.",
         [{ text: "Masuk", onPress: () => router.back() }]
       );
@@ -115,7 +116,7 @@ export default function LupaPasswordScreen() {
             <>
               <Text style={styles.fieldLabel}>Email Terdaftar</Text>
               <View style={styles.inputBox}>
-                <Text style={styles.inputPrefix}>✉️</Text>
+                <Text style={styles.inputPrefix}>@</Text>
                 <TextInput
                   style={styles.textInput}
                   placeholder="email@kampus.ac.id"
@@ -144,7 +145,6 @@ export default function LupaPasswordScreen() {
             <>
               <Text style={styles.fieldLabel}>Kode Verifikasi</Text>
               <View style={styles.inputBox}>
-                <Text style={styles.inputPrefix}>🔢</Text>
                 <TextInput
                   style={[styles.textInput, styles.kodeInput]}
                   placeholder="______"
@@ -158,7 +158,6 @@ export default function LupaPasswordScreen() {
 
               <Text style={styles.fieldLabel}>Kata Sandi Baru</Text>
               <View style={styles.inputBox}>
-                <Text style={styles.inputPrefix}>🔒</Text>
                 <TextInput
                   style={styles.textInput}
                   placeholder="Minimal 8 karakter"
@@ -172,7 +171,11 @@ export default function LupaPasswordScreen() {
                   onPress={() => setShowPassword(!showPassword)}
                   style={styles.eyeBtn}
                 >
-                  <Text style={styles.eyeIcon}>{showPassword ? "👁️" : "👁️‍🗨️"}</Text>
+                  <Ionicons
+                    name={showPassword ? "eye-outline" : "eye-off-outline"}
+                    size={18}
+                    color="#94A3B8"
+                  />
                 </TouchableOpacity>
               </View>
 

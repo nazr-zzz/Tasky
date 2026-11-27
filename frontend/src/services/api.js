@@ -126,19 +126,72 @@ function normalizeTaskPayload(taskData) {
 // AUTH SERVICES
 // =====================================================
 
-export async function loginUser(identitas, password) {
+/**
+ * Login dengan pembatasan 1 akun = 1 device.
+ * - deviceId : ID unik HP ini (dari AuthContext)
+ * - force    : true -> keluarkan perangkat lain, lalu masuk di sini
+ * Jika akun sedang dipakai HP lain, server membalas { kode: "DEVICE_BUSY" }
+ * dan fungsi ini mengembalikannya apa adanya (tidak melempar error).
+ */
+export async function loginUser(identitas, password, deviceId, force = false) {
   const baseUrl = getBaseUrl();
 
   const response = await fetchWithTimeout(`${baseUrl}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ identitas, password }),
+    body: JSON.stringify({ identitas, password, deviceId, force }),
   });
 
   const data = await parseJson(response);
 
+  // Akun sedang dipakai perangkat lain
+  if (data?.kode === "DEVICE_BUSY") return data;
+
   if (!response.ok) {
     throw new Error(data.pesan || "Login gagal.");
+  }
+
+  return data;
+}
+
+// Logout: mengosongkan kunci device di server agar akun bisa dipakai HP lain
+export async function logoutUser(userId, deviceId) {
+  const baseUrl = getBaseUrl();
+
+  const response = await fetchWithTimeout(`${baseUrl}/api/auth/logout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, deviceId }),
+  });
+
+  return response.ok;
+}
+
+/**
+ * Cek apakah HP ini masih pemegang sesi akun.
+ * Return: { aktif: true/false }
+ * Melempar error jika server tidak menjawab dengan benar
+ * (AuthContext menganggapnya offline, bukan logout).
+ */
+export async function checkSession(userId, deviceId) {
+  const baseUrl = getBaseUrl();
+
+  const response = await fetchWithTimeout(`${baseUrl}/api/auth/cek-sesi`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, deviceId }),
+  });
+
+  if (response.status === 404) {
+    console.warn(
+      "[checkSession] Endpoint /api/auth/cek-sesi belum ada di backend. Pembatasan 1 device belum aktif."
+    );
+  }
+
+  const data = await parseJson(response);
+
+  if (!response.ok || typeof data.aktif !== "boolean") {
+    throw new Error("Cek sesi gagal.");
   }
 
   return data;
@@ -317,19 +370,45 @@ export async function createClass(nama_kelas, kode_kelas, dibuat_oleh) {
   return data;
 }
 
-export async function joinClass(kode_kelas, user_id) {
+export async function joinClass(kode_kelas, user_id, semester = null) {
   const baseUrl = getBaseUrl();
+
+  const body = { kode_kelas, user_id };
+  if (semester !== undefined && semester !== null && semester !== "") {
+    body.semester = Number(semester);
+  }
 
   const response = await fetchWithTimeout(`${baseUrl}/api/kelas/join`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kode_kelas, user_id }),
+    body: JSON.stringify(body),
   });
 
   const data = await parseJson(response);
 
   if (!response.ok) {
     throw new Error(data.pesan || "Gagal bergabung ke kelas");
+  }
+
+  return data;
+}
+
+export async function updateClassName(kelasId, namaKelas, oleh) {
+  const baseUrl = getBaseUrl();
+
+  const response = await fetchWithTimeout(
+    `${baseUrl}/api/kelas/${encodeURIComponent(kelasId)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nama_kelas: namaKelas, oleh }),
+    }
+  );
+
+  const data = await parseJson(response);
+
+  if (!response.ok) {
+    throw new Error(data.pesan || "Gagal mengubah nama kelas");
   }
 
   return data;

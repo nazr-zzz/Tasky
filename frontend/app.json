@@ -40,7 +40,18 @@
     ],
     "experiments": {
       "typedRoutes": true,
-      "reactCompiler": true
-    }
+      "reactCompiler": false
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "b31d0aa1-15f8-4ac0-a44c-fcc399730701"
+      }
+    },
+    "owner": "arilfebri"
   }
 }

@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
+import { Ionicons } from "@expo/vector-icons";
 import { createClass } from "../services/api";
 
 // Buat kode undangan acak 6 karakter (huruf besar & angka, tanpa karakter yang mudah tertukar)
@@ -128,7 +129,7 @@ export default function BuatKelasScreen({
         {/* BANNER PERAN PJMK SESUAI FIGMA */}
         <View style={styles.pjmkBanner}>
           <View style={styles.pjmkIconBox}>
-            <Text style={styles.pjmkShieldIcon}>🛡️</Text>
+            <Ionicons name="shield-checkmark" size={18} color="#0047BA" />
           </View>
           <View style={styles.pjmkContent}>
             <Text style={styles.pjmkTitle}>Peran: PJMK</Text>

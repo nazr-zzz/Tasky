@@ -9,6 +9,7 @@ import {
   Dimensions,
 } from "react-native";
 import { router } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
 
@@ -40,7 +41,7 @@ export default function SplashScreen() {
         <Text style={styles.brandTitle}>Tasky</Text>
 
         <View style={styles.categoryBadge}>
-          <Text style={styles.categoryBadgeIcon}>🎓</Text>
+          <Ionicons name="school-outline" size={14} color="#0047BA" style={{ marginRight: 5 }} />
           <Text style={styles.categoryBadgeText}>
             Aplikasi Tugas Kelas Mahasiswa
           </Text>
@@ -53,7 +54,7 @@ export default function SplashScreen() {
         {/* TIPS SANTAI CARD SESUAI FIGMA */}
         <View style={styles.tipsCard}>
           <View style={styles.tipsIconBox}>
-            <Text style={styles.tipsIcon}>💡</Text>
+            <Ionicons name="bulb-outline" size={18} color="#D97706" />
           </View>
           <View style={styles.tipsContent}>
             <Text style={styles.tipsLabel}>TIPS SANTAI</Text>
@@ -83,7 +84,7 @@ export default function SplashScreen() {
             v1.0.0 • Kolaborasi Kelas Jadi Mudah
           </Text>
           <Text style={styles.madeWithText}>
-            ❤️ Dibuat untuk pejuang semester
+            Dibuat untuk pejuang semester
           </Text>
         </View>
       </View>

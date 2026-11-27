@@ -7,18 +7,45 @@ import {
   StyleSheet,
   ScrollView,
   StatusBar,
-  SafeAreaView,
   Alert,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
-import { loginUser, registerUser } from "../services/auth";
+import { Ionicons } from "@expo/vector-icons";
+import { useAuth } from "../context/AuthContext";
+
+// Ubah kode error Firebase menjadi pesan yang mudah dipahami
+const firebaseMessage = (e) => {
+  switch (e?.code) {
+    case "auth/invalid-credential":
+    case "auth/wrong-password":
+    case "auth/user-not-found":
+      return "Email atau kata sandi salah.";
+    case "auth/invalid-email":
+      return "Format email tidak valid.";
+    case "auth/email-already-in-use":
+      return "Email ini sudah terdaftar. Silakan masuk.";
+    case "auth/weak-password":
+      return "Kata sandi terlalu lemah (minimal 6 karakter).";
+    case "auth/network-request-failed":
+      return "Tidak dapat terhubung. Periksa koneksi internet Anda.";
+    case "auth/too-many-requests":
+      return "Terlalu banyak percobaan. Coba lagi beberapa saat lagi.";
+    default:
+      return e?.message || "Terjadi kesalahan. Coba lagi.";
+  }
+};
 
 export default function LoginScreen() {
+  const { login, register, authError, deviceBusy } = useAuth();
+
   // Mode tab: "daftar" | "masuk"
   const [authMode, setAuthMode] = useState("masuk");
 
-  // Form states (kosong, tanpa akun demo)
+  // Form states
   const [nama, setNama] = useState("");
   const [nim, setNim] = useState("");
   const [email, setEmail] = useState("");
@@ -28,10 +55,19 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async () => {
+    if (loading) return; // cegah tekan ganda
+
+    // email dibersihkan: spasi dibuang & huruf kecil semua
+    const cleanEmail = email.trim().toLowerCase();
+
     if (authMode === "daftar") {
       // ==================== DAFTAR ====================
-      if (!nama.trim() || !nim.trim() || !email.trim() || !password) {
+      if (!nama.trim() || !nim.trim() || !cleanEmail || !password) {
         Alert.alert("Perhatian", "Semua kolom pendaftaran wajib diisi.");
+        return;
+      }
+      if (password.length < 6) {
+        Alert.alert("Perhatian", "Kata sandi minimal 6 karakter.");
         return;
       }
       if (!agreed) {
@@ -41,62 +77,55 @@ export default function LoginScreen() {
 
       setLoading(true);
       try {
-        await registerUser(nama.trim(), nim.trim(), email.trim(), password);
-        Alert.alert(
-          "Pendaftaran Berhasil! 🎉",
-          "Akun Anda telah berhasil dibuat. Silakan masuk untuk membuka aplikasi.",
-          [
-            {
-              text: "Masuk Sekarang",
-              onPress: () => {
-                setPassword("");
-                setAuthMode("masuk");
-              },
-            },
-          ]
-        );
+        await register({
+          name: nama.trim(),
+          nim: nim.trim(),
+          email: cleanEmail,
+          password,
+        });
+        // Perpindahan ke dashboard ditangani oleh _layout.tsx.
       } catch (err) {
-        // Online-only: tampilkan error apa adanya, tidak ada akun lokal
-        Alert.alert("Pendaftaran Gagal", err.message || "Tidak dapat terhubung ke server.");
+        Alert.alert("Pendaftaran Gagal", firebaseMessage(err));
       } finally {
         setLoading(false);
       }
     } else {
       // ==================== MASUK ====================
-      if (!email.trim() || !password) {
-        Alert.alert("Perhatian", "Email/NIM dan kata sandi wajib diisi.");
+      if (!cleanEmail || !password) {
+        Alert.alert("Perhatian", "Email dan kata sandi wajib diisi.");
         return;
       }
 
       setLoading(true);
       try {
-        const result = await loginUser(email.trim(), password);
-        const userData = result?.user;
-        const userId = userData?.userId || userData?.USER_ID;
-
-        // Pastikan server benar-benar mengembalikan data pengguna
-        if (!userId) {
-          Alert.alert("Login Gagal", "Respons server tidak valid. Hubungi admin.");
-          return;
-        }
-
-        router.replace({
-          pathname: "/dashboard",
-          params: {
-            userId: String(userId),
-            nama: userData.nama || userData.NAMA || "",
-            nim: userData.nim || userData.NIM || "",
-            email: userData.email || userData.EMAIL || email.trim(),
-            semester: String(userData.semester ?? userData.SEMESTER ?? "7"),
-            role: userData.role || userData.ROLE || "Mahasiswa",
-          },
-        });
+        await login(cleanEmail, password);
+        // Perpindahan ke dashboard ditangani oleh _layout.tsx.
       } catch (error) {
-        // Online-only: tampilkan error apa adanya, tidak ada mode offline
-        Alert.alert("Login Gagal", error.message || "Tidak dapat terhubung ke server.");
+        // DEVICE_BUSY sudah tampil sebagai teks merah + tombol di bawah
+        if (error?.code !== "DEVICE_BUSY") {
+          Alert.alert("Login Gagal", firebaseMessage(error));
+        }
       } finally {
         setLoading(false);
       }
+    }
+  };
+
+  // Masuk paksa: keluarkan perangkat lain dari akun ini
+  const handleForceLogin = async () => {
+    if (loading) return;
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password) {
+      Alert.alert("Perhatian", "Email dan kata sandi wajib diisi.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await login(cleanEmail, password, true); // true = keluarkan perangkat lain
+    } catch (error) {
+      Alert.alert("Login Gagal", firebaseMessage(error));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -104,221 +133,246 @@ export default function LoginScreen() {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
 
-      <ScrollView
-        contentContainerStyle={styles.container}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        {/* LOGO & BRAND HEADER */}
-        <View style={styles.brandHeader}>
-          <View style={styles.logoBox}>
-            <Text style={styles.logoLetter}>T</Text>
+        <ScrollView
+          contentContainerStyle={styles.container}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* LOGO & BRAND HEADER */}
+          <View style={styles.brandHeader}>
+            <View style={styles.logoBox}>
+              <Text style={styles.logoLetter}>T</Text>
+            </View>
+
+            <View style={styles.titleRow}>
+              <Text style={styles.brandTitle}>Tasky</Text>
+              <View style={styles.akademikBadge}>
+                <Text style={styles.akademikText}>Akademik</Text>
+              </View>
+            </View>
+
+            <Text style={styles.brandSubtitle}>
+              Sistem Pengingat Tugas Kuliah Berbasis{"\n"}Kelas
+            </Text>
           </View>
 
-          <View style={styles.titleRow}>
-            <Text style={styles.brandTitle}>Tasky</Text>
-            <View style={styles.akademikBadge}>
-              <Text style={styles.akademikText}>Akademik</Text>
+          {/* TAB SWITCHER: [ DAFTAR ] | [ MASUK ] */}
+          <View style={styles.tabSwitcher}>
+            <TouchableOpacity
+              style={[
+                styles.tabButton,
+                authMode === "daftar" && styles.tabButtonActive,
+              ]}
+              onPress={() => setAuthMode("daftar")}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={[
+                  styles.tabButtonText,
+                  authMode === "daftar" && styles.tabButtonTextActive,
+                ]}
+              >
+                Daftar
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.tabButton,
+                authMode === "masuk" && styles.tabButtonActive,
+              ]}
+              onPress={() => setAuthMode("masuk")}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={[
+                  styles.tabButtonText,
+                  authMode === "masuk" && styles.tabButtonTextActive,
+                ]}
+              >
+                Masuk
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* FORM DAFTAR / MASUK */}
+          <View style={styles.formContainer}>
+            {authMode === "daftar" && (
+              <>
+                {/* NAMA LENGKAP */}
+                <Text style={styles.fieldLabel}>Nama Lengkap</Text>
+                <View style={styles.inputBox}>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="Nama lengkap Anda"
+                    placeholderTextColor="#94A3B8"
+                    value={nama}
+                    onChangeText={setNama}
+                  />
+                </View>
+
+                {/* NIM */}
+                <View style={styles.labelRow}>
+                  <Text style={styles.fieldLabel}>Nomor Induk Mahasiswa (NIM)</Text>
+                  <Text style={styles.requiredTag}>Wajib</Text>
+                </View>
+                <View style={styles.inputBox}>
+                  <Text style={styles.inputPrefix}>#</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="Masukkan NIM"
+                    placeholderTextColor="#94A3B8"
+                    value={nim}
+                    onChangeText={setNim}
+                    keyboardType="number-pad"
+                  />
+                </View>
+              </>
+            )}
+
+            {/* EMAIL */}
+            <Text style={styles.fieldLabel}>Email Kampus / Pribadi</Text>
+            <View style={styles.inputBox}>
+              <Text style={styles.inputPrefix}>@</Text>
+              <TextInput
+                style={styles.textInput}
+                placeholder="mahasiswa@kampus.ac.id"
+                placeholderTextColor="#94A3B8"
+                value={email}
+                onChangeText={setEmail}
+                autoCapitalize="none"
+                autoCorrect={false}
+                spellCheck={false}
+                keyboardType="email-address"
+              />
+            </View>
+
+            {/* PASSWORD */}
+            <Text style={styles.fieldLabel}>Kata Sandi</Text>
+            <View style={styles.inputBox}>
+              <TextInput
+                style={styles.textInput}
+                placeholder="Minimal 6 karakter"
+                placeholderTextColor="#94A3B8"
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+                autoCorrect={false}
+                spellCheck={false}
+                onSubmitEditing={handleSubmit}
+                returnKeyType="go"
+              />
+              <TouchableOpacity
+                onPress={() => setShowPassword(!showPassword)}
+                style={styles.eyeBtn}
+              >
+                <Ionicons
+                  name={showPassword ? "eye-outline" : "eye-off-outline"}
+                  size={18}
+                  color="#64748B"
+                />
+              </TouchableOpacity>
+            </View>
+
+            {authMode === "masuk" && (
+              <TouchableOpacity
+                onPress={() => router.push("/lupa-password")}
+                style={{ alignSelf: "flex-end", marginBottom: 4 }}
+              >
+                <Text style={{ fontSize: 12, fontWeight: "700", color: "#073B82" }}>
+                  Lupa kata sandi?
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {/* PESAN ERROR SESI (mis. akun dipakai di perangkat lain) */}
+            {authMode === "masuk" && !!authError && (
+              <Text style={styles.errorText}>{authError}</Text>
+            )}
+
+            {/* TOMBOL MASUK PAKSA (muncul hanya jika akun dipakai di perangkat lain) */}
+            {authMode === "masuk" && deviceBusy && (
+              <TouchableOpacity
+                onPress={handleForceLogin}
+                style={{ marginBottom: 6 }}
+                activeOpacity={0.7}
+              >
+                <Text style={{ fontSize: 12, fontWeight: "700", color: "#073B82" }}>
+                  Masuk & keluarkan perangkat lain
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {/* CHECKBOX PERSETUJUAN (KHUSUS DAFTAR) */}
+            {authMode === "daftar" && (
+              <TouchableOpacity
+                style={styles.agreeRow}
+                onPress={() => setAgreed(!agreed)}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.checkbox, agreed && styles.checkboxActive]}>
+                  {agreed && <Text style={styles.checkMark}>✓</Text>}
+                </View>
+                <Text style={styles.agreeText}>
+                  Saya menyetujui sinkronisasi jadwal perkuliahan dan penyimpanan
+                  data tugas di server.
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {/* TOMBOL UTAMA */}
+            <TouchableOpacity
+              style={[styles.mainSubmitBtn, loading && styles.btnDisabled]}
+              onPress={handleSubmit}
+              disabled={loading}
+              activeOpacity={0.8}
+            >
+              {loading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.mainSubmitText}>
+                  {authMode === "daftar" ? "Daftar →" : "Masuk →"}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* INFO FOOTER */}
+          <View style={styles.featureCard}>
+            <View style={styles.featureIconCircle}>
+              <Ionicons name="school-outline" size={20} color="#0047BA" />
+            </View>
+            <View style={styles.featureContent}>
+              <Text style={styles.featureTitle}>
+                Terintegrasi Dengan Jadwal Kuliah
+              </Text>
+              <Text style={styles.featureDesc}>
+                Kelola tenggat waktu per mata kuliah, notifikasi otomatis sebelum
+                kuliah dimulai, dan pembagian tugas kelompok dalam satu aplikasi.
+              </Text>
             </View>
           </View>
 
-          <Text style={styles.brandSubtitle}>
-            Sistem Pengingat Tugas Kuliah Berbasis{"\n"}Kelas
-          </Text>
-        </View>
-
-        {/* TAB SWITCHER: [ DAFTAR ] | [ MASUK ] */}
-        <View style={styles.tabSwitcher}>
+          {/* LINK SWITCH AKUN SESUAI FIGMA */}
           <TouchableOpacity
-            style={[
-              styles.tabButton,
-              authMode === "daftar" && styles.tabButtonActive,
-            ]}
-            onPress={() => setAuthMode("daftar")}
-            activeOpacity={0.8}
+            style={styles.switchAuthLink}
+            onPress={() => setAuthMode(authMode === "daftar" ? "masuk" : "daftar")}
+            activeOpacity={0.7}
           >
-            <Text
-              style={[
-                styles.tabButtonText,
-                authMode === "daftar" && styles.tabButtonTextActive,
-              ]}
-            >
-              👤+ Daftar
+            <Text style={styles.switchAuthText}>
+              {authMode === "daftar" ? "Sudah punya akun? " : "Belum punya akun? "}
+              <Text style={styles.switchAuthBold}>
+                {authMode === "daftar" ? "Masuk ke Akun" : "Daftar"}
+              </Text>
             </Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.tabButton,
-              authMode === "masuk" && styles.tabButtonActive,
-            ]}
-            onPress={() => setAuthMode("masuk")}
-            activeOpacity={0.8}
-          >
-            <Text
-              style={[
-                styles.tabButtonText,
-                authMode === "masuk" && styles.tabButtonTextActive,
-              ]}
-            >
-              →] Masuk
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* FORM DAFTAR / MASUK */}
-        <View style={styles.formContainer}>
-          {authMode === "daftar" && (
-            <>
-              {/* NAMA LENGKAP */}
-              <Text style={styles.fieldLabel}>Nama Lengkap</Text>
-              <View style={styles.inputBox}>
-                <Text style={styles.inputPrefix}>🪪</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="Nama lengkap Anda"
-                  placeholderTextColor="#94A3B8"
-                  value={nama}
-                  onChangeText={setNama}
-                />
-              </View>
-
-              {/* NIM */}
-              <View style={styles.labelRow}>
-                <Text style={styles.fieldLabel}>Nomor Induk Mahasiswa (NIM)</Text>
-                <Text style={styles.requiredTag}>Wajib</Text>
-              </View>
-              <View style={styles.inputBox}>
-                <Text style={styles.inputPrefix}>#</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="Masukkan NIM"
-                  placeholderTextColor="#94A3B8"
-                  value={nim}
-                  onChangeText={setNim}
-                  keyboardType="number-pad"
-                />
-              </View>
-            </>
-          )}
-
-          {/* EMAIL */}
-          <Text style={styles.fieldLabel}>
-            {authMode === "daftar" ? "Email Kampus / Pribadi" : "Email Kampus atau NIM"}
-          </Text>
-          <View style={styles.inputBox}>
-            <Text style={styles.inputPrefix}>✉️</Text>
-            <TextInput
-              style={styles.textInput}
-              placeholder={
-                authMode === "daftar"
-                  ? "mahasiswa@kampus.ac.id"
-                  : "email@kampus.ac.id atau NIM"
-              }
-              placeholderTextColor="#94A3B8"
-              value={email}
-              onChangeText={setEmail}
-              autoCapitalize="none"
-              keyboardType="email-address"
-            />
-          </View>
-
-          {/* PASSWORD */}
-          <Text style={styles.fieldLabel}>Kata Sandi</Text>
-          <View style={styles.inputBox}>
-            <Text style={styles.inputPrefix}>🔒</Text>
-            <TextInput
-              style={styles.textInput}
-              placeholder="Minimal 8 karakter"
-              placeholderTextColor="#94A3B8"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry={!showPassword}
-              autoCapitalize="none"
-            />
-            <TouchableOpacity
-              onPress={() => setShowPassword(!showPassword)}
-              style={styles.eyeBtn}
-            >
-              <Text style={styles.eyeIcon}>{showPassword ? "👁️" : "👁️‍🗨️"}</Text>
-            </TouchableOpacity>
-          </View>
-          
-           {authMode === "masuk" && (
-            <TouchableOpacity
-              onPress={() => router.push("/lupa-password")}
-              style={{ alignSelf: "flex-end", marginBottom: 4 }}
-            >
-              <Text style={{ fontSize: 12, fontWeight: "700", color: "#073B82" }}>
-                Lupa kata sandi?
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          {/* CHECKBOX PERSETUJUAN (KHUSUS DAFTAR) */}
-          {authMode === "daftar" && (
-            <TouchableOpacity
-              style={styles.agreeRow}
-              onPress={() => setAgreed(!agreed)}
-              activeOpacity={0.8}
-            >
-              <View style={[styles.checkbox, agreed && styles.checkboxActive]}>
-                {agreed && <Text style={styles.checkMark}>✓</Text>}
-              </View>
-              <Text style={styles.agreeText}>
-                Saya menyetujui sinkronisasi jadwal perkuliahan dan penyimpanan
-                data tugas di server.
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          {/* TOMBOL UTAMA */}
-          <TouchableOpacity
-            style={[styles.mainSubmitBtn, loading && styles.btnDisabled]}
-            onPress={handleSubmit}
-            disabled={loading}
-            activeOpacity={0.8}
-          >
-            {loading ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text style={styles.mainSubmitText}>
-                {authMode === "daftar" ? "Daftar →" : "Masuk →"}
-              </Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {/* INFO FOOTER */}
-        <View style={styles.featureCard}>
-          <View style={styles.featureIconCircle}>
-            <Text style={styles.featureIcon}>🎓</Text>
-          </View>
-          <View style={styles.featureContent}>
-            <Text style={styles.featureTitle}>
-              Terintegrasi Dengan Jadwal Kuliah
-            </Text>
-            <Text style={styles.featureDesc}>
-              Kelola tenggat waktu per mata kuliah, notifikasi otomatis sebelum
-              kuliah dimulai, dan pembagian tugas kelompok dalam satu aplikasi.
-            </Text>
-          </View>
-        </View>
-
-        {/* LINK SWITCH AKUN SESUAI FIGMA */}
-        <TouchableOpacity
-          style={styles.switchAuthLink}
-          onPress={() => setAuthMode(authMode === "daftar" ? "masuk" : "daftar")}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.switchAuthText}>
-            {authMode === "daftar" ? "Sudah punya akun? " : "Belum punya akun? "}
-            <Text style={styles.switchAuthBold}>
-              {authMode === "daftar" ? "Masuk ke Akun" : "Daftar"}
-            </Text>
-          </Text>
-        </TouchableOpacity>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -468,6 +522,13 @@ const styles = StyleSheet.create({
   },
   eyeIcon: {
     fontSize: 15,
+  },
+  errorText: {
+    color: "#DC2626",
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 6,
+    marginBottom: 4,
   },
   agreeRow: {
     flexDirection: "row",
